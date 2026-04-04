@@ -30,9 +30,18 @@ jobs:
           pip install --upgrade pip
           pip install yfinance pandas numpy scikit-learn xgboost ta textblob feedparser requests python-dotenv joblib beautifulsoup4 pytrends certifi GoogleNews
 
-      - name: BIST 100 Taraması Başlat
+      - name: BIST 100 Taraması ve Oto-Trader Çalıştır
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python cloud_scanner.py
+
+      - name: Portföy Değişikliklerini Kaydet
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git pull origin main
+          git add portfolio.db
+          git commit -m "🤖 Oto-Trader: Portföy güncellendi" || echo "Değişiklik yok"
+          git push origin HEAD:main

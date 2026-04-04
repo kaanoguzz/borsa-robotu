@@ -634,12 +634,25 @@ class BorsaRobotuApp(ctk.CTk):
         if reason:
             right = ctk.CTkFrame(row, fg_color="transparent")
             right.pack(side="right", padx=10, pady=8)
+
+            # "AL" sinyali ise, yanına "Portföye Ekle" butonu koy
+            if "AL" in action:
+                def on_add_click(s=symbol, p=price):
+                    self._open_add_dialog(pre_symbol=s, pre_price=p)
+                
+                add_btn = ctk.CTkButton(right, text="➕ Portföye Ekle", width=120, height=28,
+                                        font=("Inter", 11, "bold"), corner_radius=6,
+                                        fg_color=COLORS["accent_green"], text_color=COLORS["bg_dark"],
+                                        hover_color="#00D26A",
+                                        command=on_add_click)
+                add_btn.pack(side="right", padx=(10, 0))
+
             ctk.CTkLabel(right, text=reason[:60], font=("Inter", 9),
                          text_color=COLORS["text_muted"], anchor="e").pack(side="right")
 
     # ===== PORTFÖY İŞLEMLERİ =====
 
-    def _open_add_dialog(self):
+    def _open_add_dialog(self, pre_symbol=None, pre_price=None):
         """Hisse ekle dialog"""
         dialog = ctk.CTkToplevel(self)
         dialog.title("Hisse Ekle")
@@ -660,6 +673,8 @@ class BorsaRobotuApp(ctk.CTk):
                                       fg_color=COLORS["bg_input"],
                                       border_color=COLORS["border"])
         symbol_entry.pack(fill="x", pady=(2, 10))
+        if pre_symbol:
+            symbol_entry.insert(0, pre_symbol)
 
         ctk.CTkLabel(fields, text="Adet:", font=("Inter", 11),
                      text_color=COLORS["text_secondary"]).pack(anchor="w")
@@ -674,6 +689,8 @@ class BorsaRobotuApp(ctk.CTk):
                                      fg_color=COLORS["bg_input"],
                                      border_color=COLORS["border"])
         price_entry.pack(fill="x", pady=(2, 16))
+        if pre_price:
+            price_entry.insert(0, str(round(pre_price, 2)))
 
         def do_add():
             sym = symbol_entry.get().strip().upper()

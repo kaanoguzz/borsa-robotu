@@ -154,12 +154,70 @@ def run_cloud_scan():
         from signal_generator import SignalGenerator
         from data_collector import DataCollector
         from config import BIST100_TICKERS
+        from portfolio import PortfolioManager
+        import yfinance as yf
     except ImportError as e:
         logger.error(f"Modul import hatasi: {e}")
         sys.exit(1)
 
     sg = SignalGenerator()
     dc = DataCollector()
+    pm = PortfolioManager()
+
+    # ==================== OTO-SAT KONTROLÜ ====================
+    holdings = pm.get_portfolio()
+    auto_sell_messages = []
+    
+    if holdings:
+        logger.info(f"Oto-Sat kontrolu yapiliyor ({len(holdings)} hisse)...")
+        symbols_to_check = [h["symbol"] for h in holdings]
+        if symbols_to_check:
+            try:
+                # Toplu fiyat çekimi
+                data = yf.download(symbols_to_check, period="1d", group_by="ticker", progress=False)
+                
+                for h in holdings:
+                    sym = h["symbol"]
+                    qty = h["quantity"]
+                    
+                    if qty <= 0:
+                        continue
+                        
+                    # Yfinance multiple vs single ticker yapısal farkını düzelt
+                    if len(symbols_to_check) == 1:
+                        current_price = data["Close"].iloc[-1]
+                    else:
+                        current_price = data[sym]["Close"].iloc[-1]
+                        
+                    target = h.get("target_price", 0)
+                    stop = h.get("stop_loss", 0)
+                    buy_price = h.get("avg_buy_price", 0)
+                    
+                    sell_reason = ""
+                    if target > 0 and current_price >= target:
+                        sell_reason = f"🎯 Hedef fiyata ulasti ({target} TL)"
+                    elif stop > 0 and current_price <= stop:
+                        sell_reason = f"🛑 Stop loss seviyesine indi ({stop} TL)"
+                        
+                    if sell_reason:
+                        # Satış işlemi
+                        result = pm.remove_stock(sym, qty, current_price, reason=sell_reason)
+                        if result["success"]:
+                            # Parayı bakiyeye ekle
+                            pm.update_balance(result["sell_value"])
+                            profit = result["profit_loss"]
+                            emoji = "📈" if profit > 0 else "📉"
+                            msg = (
+                                f"🤖 <b>OTO-SAT GERÇEKLEŞTİ</b>\n\n"
+                                f"📦 #{sym} — {qty} adet satildi.\n"
+                                f"💰 Fiyat: {current_price:.2f} TL\n"
+                                f"📝 Neden: {sell_reason}\n"
+                                f"{emoji} Kâr/Zarar: {profit:+.2f} TL"
+                            )
+                            auto_sell_messages.append(msg)
+                            logger.info(f"OTO-SAT: {sym} satildi. Neden: {sell_reason}")
+            except Exception as e:
+                logger.error(f"Oto-sat kontrolunde hata: {e}")
 
     buy_signals = []
     sell_signals = []
@@ -248,6 +306,41 @@ def run_cloud_scan():
 
         msg += "⚡ <i>Bulut Tarayıcı — Bilgisayar kapalıyken çalışır</i>"
         send_telegram(msg)
+
+        # ==================== OTO-AL İŞLEMİ ====================
+        balance = pm.get_balance()
+        if balance > 0:
+            # En iyi hisseyi seç (Skor'a göre ilk sıradaki, çünkü yukarıda sort edildi)
+            best = buy_signals[0]
+            price = best["price"]
+            
+            # Alınabilecek maksimum adet
+            qty = int(balance / price)
+            
+            if qty > 0:
+                cost = qty * price
+                # Bakiyeden düş ve portföye ekle
+                pm.update_balance(-cost)
+                pm.add_stock(best["symbol"], qty, price, 
+                             target_price=best["target"], 
+                             stop_loss=best["stop"], 
+                             notes="Otomatik Alım")
+                
+                oto_al_msg = (
+                    f"🤖 <b>OTO-ALIM GERÇEKLEŞTİ</b>\n\n"
+                    f"📦 #{best['symbol']} — {qty} adet alindi.\n"
+                    f"💰 Fiyat: {price:.2f} TL\n"
+                    f"💵 Odenen: {cost:.2f} TL\n"
+                    f"🎯 Hedef: {best['target']:.2f} TL | 🛑 Stop: {best['stop']:.2f} TL\n"
+                    f"💼 Kalan Bakiye: {pm.get_balance():.2f} TL"
+                )
+                send_telegram(oto_al_msg)
+            else:
+                logger.info(f"OTO-AL yapilamadi. Bakiye ({balance:.2f} TL), {best['symbol']} ({price:.2f} TL) almaya yetmiyor.")
+
+    # Oto-Sat bildirimlerini gönder
+    for m in auto_sell_messages:
+        send_telegram(m)
 
     # ===== SAT SİNYALLERİ =====
     if sell_signals:

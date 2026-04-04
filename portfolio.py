@@ -33,6 +33,8 @@ class PortfolioManager:
                 quantity REAL NOT NULL,
                 buy_price REAL NOT NULL,
                 buy_date TEXT NOT NULL,
+                target_price REAL DEFAULT 0,
+                stop_loss REAL DEFAULT 0,
                 notes TEXT DEFAULT '',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
@@ -89,23 +91,46 @@ class PortfolioManager:
     def _get_conn(self):
         return sqlite3.connect(self.db_path)
 
+    # ==================== NAKİT BAKİYE (AUTO-TRADER İÇİN) ====================
+
+    def get_balance(self) -> float:
+        """Mevcut nakit bakiyeyi döndürür"""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT amount FROM balance ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else 0.0
+
+    def update_balance(self, amount_change: float) -> float:
+        """Bakiyeyi günceller (alım için negatif, satım için pozitif amount_change)"""
+        current = self.get_balance()
+        new_balance = current + amount_change
+        
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE balance SET amount = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1", (new_balance,))
+        conn.commit()
+        conn.close()
+        return new_balance
+
     # ==================== PORTFÖY İŞLEMLERİ ====================
 
-    def add_stock(self, symbol: str, quantity: float, buy_price: float, notes: str = "") -> dict:
-        """Portföye hisse ekler"""
+    def add_stock(self, symbol: str, quantity: float, buy_price: float, target_price: float = 0, stop_loss: float = 0, notes: str = "") -> dict:
+        """Portföye hisse ekler (Otomatik/Yarı otomatik)"""
         conn = self._get_conn()
         cursor = conn.cursor()
 
         try:
             cursor.execute(
-                "INSERT INTO portfolio (symbol, quantity, buy_price, buy_date, notes) VALUES (?, ?, ?, ?, ?)",
-                (symbol.upper(), quantity, buy_price, datetime.now().isoformat(), notes)
+                "INSERT INTO portfolio (symbol, quantity, buy_price, buy_date, target_price, stop_loss, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (symbol.upper(), quantity, buy_price, datetime.now().isoformat(), target_price, stop_loss, notes)
             )
             
             # İşlem geçmişine ekle
             cursor.execute(
                 "INSERT INTO transactions (symbol, action, quantity, price, total_value, reason) VALUES (?, ?, ?, ?, ?, ?)",
-                (symbol.upper(), "AL", quantity, buy_price, quantity * buy_price, notes or "Manuel ekleme")
+                (symbol.upper(), "AL", quantity, buy_price, quantity * buy_price, notes or "Manuel / Oto ekleme")
             )
 
             conn.commit()
@@ -196,6 +221,8 @@ class PortfolioManager:
             SELECT symbol, SUM(quantity) as total_qty, 
                    AVG(buy_price) as avg_price,
                    MIN(buy_date) as first_buy,
+                   AVG(target_price) as target_price,
+                   AVG(stop_loss) as stop_loss,
                    GROUP_CONCAT(notes, '; ') as notes
             FROM portfolio 
             GROUP BY symbol
@@ -209,8 +236,10 @@ class PortfolioManager:
                 "quantity": row[1],
                 "avg_buy_price": round(row[2], 2),
                 "first_buy_date": row[3],
+                "target_price": round(row[4] or 0, 2),
+                "stop_loss": round(row[5] or 0, 2),
                 "total_cost": round(row[1] * row[2], 2),
-                "notes": row[4] or ""
+                "notes": row[6] or ""
             })
 
         conn.close()

@@ -1,0 +1,123 @@
+import os
+import json
+import logging
+from datetime import datetime
+
+PORTFOLIO_FILE = os.path.join(os.path.dirname(__file__), "portfolio.json")
+
+class Portfolio:
+    def __init__(self):
+        self.file = PORTFOLIO_FILE
+        self.target = 100000.0
+        self.load()
+
+    def load(self):
+        if os.path.exists(self.file):
+            with open(self.file, "r") as f:
+                self.data = json.load(f)
+        else:
+            self.data = {
+                "bakiye": 200.0,
+                "hisseler": {},
+                "islem_gecmisi": []
+            }
+            self.save()
+
+    def save(self):
+        with open(self.file, "w") as f:
+            json.dump(self.data, f, indent=4)
+
+    def buy(self, symbol, price):
+        komisyon_orani = 0.002
+        # Tüm bakiye ile alım
+        islem_tutari = self.data["bakiye"]
+        komisyon = islem_tutari * komisyon_orani
+        net_tutar = islem_tutari - komisyon
+        
+        adet = net_tutar / price
+        
+        if net_tutar <= 0:
+            return False, "Yetersiz bakiye"
+            
+        self.data["bakiye"] = 0
+        self.data["hisseler"][symbol] = {
+            "adet": adet,
+            "maliyet": price,
+            "en_yuksek_fiyat": price, # Trailing stop için
+            "stop_loss": price * 0.97, # %3 Zarar Kes
+            "trailing_stop": price * 0.98, # %2 İz süren stop ilk seviye
+            "alim_tarihi": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        self.data["islem_gecmisi"].append({
+            "tip": "AL",
+            "symbol": symbol,
+            "fiyat": price,
+            "adet": adet,
+            "komisyon": komisyon,
+            "tarih": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        })
+        self.save()
+        return True, adet
+
+    def sell(self, symbol, price, neden=""):
+        if symbol not in self.data["hisseler"]:
+            return False, "Hisse portföyde yok"
+            
+        hisse = self.data["hisseler"][symbol]
+        adet = hisse["adet"]
+        maliyet = hisse["maliyet"]
+        brut_gelir = adet * price
+        
+        komisyon_orani = 0.002
+        komisyon = brut_gelir * komisyon_orani
+        net_gelir = brut_gelir - komisyon
+        
+        kar_zarar_orani = ((price - maliyet) / maliyet) * 100
+        
+        self.data["bakiye"] += net_gelir
+        del self.data["hisseler"][symbol]
+        
+        self.data["islem_gecmisi"].append({
+            "tip": "SAT",
+            "symbol": symbol,
+            "fiyat": price,
+            "adet": adet,
+            "komisyon": komisyon,
+            "kar_zarar_orani": kar_zarar_orani,
+            "neden": neden,
+            "tarih": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        })
+        self.save()
+        
+        ilerleme = (self.data["bakiye"] / self.target) * 100
+        return True, net_gelir, kar_zarar_orani, ilerleme
+        
+    def update_trailing_stop(self, symbol, current_price):
+        if symbol not in self.data["hisseler"]:
+            return False, ""
+            
+        hisse = self.data["hisseler"][symbol]
+        
+        # Fiyat yeni bir zirve yaptıysa trailing stop'u %2 aşağıya güncelle
+        if current_price > hisse["en_yuksek_fiyat"]:
+            hisse["en_yuksek_fiyat"] = current_price
+            yeni_trailing = current_price * 0.98
+            if yeni_trailing > hisse["trailing_stop"]:
+                hisse["trailing_stop"] = yeni_trailing
+                self.save()
+                
+        # Stop Kontrolleri
+        if current_price <= hisse["stop_loss"]:
+            return True, "Zarar Kes (%3) tetiklendi"
+            
+        if current_price <= hisse["trailing_stop"]:
+            return True, "İz Süren Stop (%2) tetiklendi"
+            
+        return False, ""
+        
+    def get_progress(self):
+        # Eğer hissede isek tahmini değeri bakiye olarak hesapla
+        toplam_deger = self.data["bakiye"]
+        # Tahmini olarak maliyetten değer biçelim, ama canlı veri için dışarıdan güncel fiyat gelebilir
+        return (toplam_deger / self.target) * 100

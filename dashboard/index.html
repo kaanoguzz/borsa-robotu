@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIST 100 Borsa Robotu — Dashboard</title>
+    <meta name="description" content="BIST 100 hisselerini 4 katmanlı analiz ile takip eden borsa robotu kontrol paneli">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- HEADER -->
+    <header id="main-header">
+        <div class="header-left">
+            <div class="logo">🤖</div>
+            <div>
+                <h1>BIST 100 Borsa Robotu</h1>
+                <p class="subtitle">4 Katman • Backtest • 4'lü Süzgeç • AI Tahmin</p>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="status-badge" id="system-status">
+                <span class="pulse"></span> Sistem Aktif
+            </div>
+            <div class="clock" id="clock"></div>
+        </div>
+    </header>
+
+    <!-- GOAL TRACKER BAR -->
+    <div class="goal-bar" id="goal-bar">
+        <div class="goal-info">
+            <span>🎯 Hedef: <strong>200 TL → 100.000 TL</strong></span>
+            <span id="goal-current">Yükleniyor...</span>
+        </div>
+        <div class="goal-progress-container">
+            <div class="goal-progress-fill" id="goal-fill" style="width: 0.2%"></div>
+        </div>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <main>
+        <!-- STATS ROW -->
+        <section class="stats-row" id="stats-section">
+            <div class="stat-card" id="stat-portfolio">
+                <div class="stat-icon">💼</div>
+                <div class="stat-value" id="portfolio-value">—</div>
+                <div class="stat-label">Portföy Değeri</div>
+                <div class="stat-change" id="portfolio-change"></div>
+            </div>
+            <div class="stat-card" id="stat-profit">
+                <div class="stat-icon">📈</div>
+                <div class="stat-value" id="total-profit">—</div>
+                <div class="stat-label">Toplam Kâr/Zarar</div>
+                <div class="stat-change" id="profit-pct"></div>
+            </div>
+            <div class="stat-card" id="stat-signals">
+                <div class="stat-icon">🎯</div>
+                <div class="stat-value" id="active-signals">—</div>
+                <div class="stat-label">Aktif Sinyal</div>
+                <div class="stat-change">Son 24 saat</div>
+            </div>
+            <div class="stat-card" id="stat-risk">
+                <div class="stat-icon">🛡️</div>
+                <div class="stat-value" id="risk-level">—</div>
+                <div class="stat-label">Risk Seviyesi</div>
+                <div class="stat-change" id="xu100-trend"></div>
+            </div>
+        </section>
+
+        <!-- TWO COLUMN LAYOUT -->
+        <div class="grid-2col">
+            <!-- LEFT: ANALYZE -->
+            <section class="card" id="analyze-section">
+                <div class="card-header">
+                    <h2>🔍 Hisse Analizi</h2>
+                </div>
+                <div class="analyze-input">
+                    <input type="text" id="analyze-input" placeholder="Hisse kodu girin (ör: THYAO)" maxlength="6" autocomplete="off">
+                    <button id="analyze-btn" onclick="analyzeStock()">Analiz Et</button>
+                </div>
+                <div id="analyze-result" class="analyze-result"></div>
+            </section>
+
+            <!-- RIGHT: PORTFOLIO -->
+            <section class="card" id="portfolio-section">
+                <div class="card-header">
+                    <h2>💼 Portföy</h2>
+                    <button class="btn-sm" onclick="openAddModal()">+ Ekle</button>
+                </div>
+                <div id="portfolio-list" class="portfolio-list">
+                    <div class="empty-state">Portföy yükleniyor...</div>
+                </div>
+            </section>
+        </div>
+
+        <!-- SIGNALS TABLE -->
+        <section class="card" id="signals-section">
+            <div class="card-header">
+                <h2>📊 Son Sinyaller</h2>
+                <button class="btn-sm" onclick="loadSignals()">Yenile</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="signals-table">
+                    <thead>
+                        <tr>
+                            <th>Tarih</th>
+                            <th>Hisse</th>
+                            <th>Sinyal</th>
+                            <th>Skor</th>
+                            <th>Teknik</th>
+                            <th>Haber</th>
+                            <th>ML</th>
+                            <th>Fiyat</th>
+                        </tr>
+                    </thead>
+                    <tbody id="signals-body">
+                        <tr><td colspan="8" class="empty-state">Yükleniyor...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- BIST 100 QUICK SCAN -->
+        <section class="card" id="bist-section">
+            <div class="card-header">
+                <h2>🇹🇷 BIST 100 Hızlı Tarama</h2>
+                <button class="btn-sm btn-accent" id="scan-btn" onclick="quickScan()">Tara</button>
+            </div>
+            <div id="scan-results" class="scan-results">
+                <div class="empty-state">Tarama başlatmak için butona tıklayın</div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ADD STOCK MODAL -->
+    <div class="modal-overlay" id="add-modal" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Portföye Hisse Ekle</h3>
+                <button class="modal-close" onclick="closeAddModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <label>Hisse Kodu</label>
+                <input type="text" id="add-symbol" placeholder="THYAO" maxlength="6">
+                <label>Adet</label>
+                <input type="number" id="add-quantity" placeholder="100">
+                <label>Alış Fiyatı (TL)</label>
+                <input type="number" id="add-price" placeholder="45.50" step="0.01">
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeAddModal()">İptal</button>
+                <button class="btn-primary" onclick="addStock()">Ekle</button>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>🤖 BIST 100 Borsa Robotu v1.0 — 4 Katmanlı Analiz Sistemi</p>
+        <p class="disclaimer">⚠️ Bu sistem yatırım tavsiyesi vermez. Tüm kararlar kullanıcıya aittir.</p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

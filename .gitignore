@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite3
+models/
+*.joblib
+.vscode/
+.idea/
+venv/
+debug_*.py
+tam_tarama.py
+*.png

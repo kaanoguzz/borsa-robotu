@@ -1,0 +1,38 @@
+name: BIST 100 Otomatik Tarama
+
+on:
+  schedule:
+    # Borsa saatlerinde her 15 dakikada bir çalış (UTC saati, TR = UTC+3)
+    # TR 10:00 = UTC 07:00, TR 18:00 = UTC 15:00
+    # Hafta içi her 15 dakikada bir
+    - cron: '*/15 7-15 * * 1-5'
+
+  # Manuel tetikleme (test için)
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python Kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Bağımlılıkları Kur
+        run: |
+          pip install --upgrade pip
+          pip install yfinance pandas numpy scikit-learn xgboost ta textblob feedparser requests python-dotenv joblib beautifulsoup4 pytrends certifi
+
+      - name: BIST 100 Taraması Başlat
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python cloud_scanner.py

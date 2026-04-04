@@ -64,7 +64,9 @@ POSITIVE_WORDS_TR = [
     "talep", "alım", "yatırım", "fırsat", "umut", "iyileşme", "ralli", "zirve",
     "beklentilerin üzerinde", "hedef yükseldi", "temettü", "kârlılık", "verimli",
     "ihracat artışı", "pazar payı", "genişleme", "inovasyon", "anlaşma", "ortaklık",
-    "başarılı", "güvenilir", "istikrar", "performans"
+    "başarılı", "güvenilir", "istikrar", "performans", "yeni proje", "ihale kazandı",
+    "yatırım kararı", "teşvik belgesi", "kap duyurusu", "yeni tesis", "kapasite artışı",
+    "sözleşme imzalandı"
 ]
 
 NEGATIVE_WORDS_TR = [
@@ -198,6 +200,55 @@ class NewsAnalyzer:
             "analyzed_at": datetime.now().isoformat()
         }
 
+    def get_company_projects(self, symbol: str) -> dict:
+        """Şirketin yeni yatırımlarını, ihalelerini ve projelerini analiz eder"""
+        company_name = COMPANY_NAMES.get(symbol, [symbol])[0]
+        
+        # Proje ve yatırım odaklı arama terimleri
+        search_terms = [
+            f"{company_name} yeni proje",
+            f"{company_name} yatırım kararı",
+            f"{company_name} ihale",
+            f"{company_name} kapasite artışı",
+            f"{company_name} KAP yeni iş ilişkisi"
+        ]
+        
+        project_news = []
+        for term in search_terms:
+            try:
+                # Maksimum son 30 günlük projelere bak (uzun vadeli etki için search_google_news "7d" parametresini geçersiz kılmak için manuel RSS url gerekir ama metodumuz 7d kısıtlı. 
+                # Sorun değil, taze haber/proje daha etkilidir)
+                news = self._search_google_news(term)
+                for item in news:
+                    # Duplicate ve alakasız haber filtresi
+                    if any(kw in item['title'].lower() or kw in item['summary'].lower() for kw in ["yatırım", "ihale", "proje", "sözleşme", "anlaşma", "kapasite", "tesis"]):
+                        item['sentiment'] = self._analyze_sentiment(item['title'] + " " + item.get('summary', ''))
+                        project_news.append(item)
+            except Exception as e:
+                logger.error(f"Proje arama hatası ({term}): {e}")
+
+        # Aynı haberleri sil
+        seen_titles = set()
+        unique_projects = []
+        for item in project_news:
+            if item['title'] not in seen_titles:
+                seen_titles.add(item['title'])
+                unique_projects.append(item)
+
+        if unique_projects:
+            # Proje haberleri her zaman pozitiftir ama sentimentine de bakalım
+            avg_project_sentiment = sum(n['sentiment']['score'] for n in unique_projects) / len(unique_projects)
+            # Minimum pozitif score garantile
+            avg_project_sentiment = max(0.5, avg_project_sentiment) 
+        else:
+            avg_project_sentiment = 0
+
+        return {
+            "project_news": unique_projects[:5],
+            "project_sentiment": round(avg_project_sentiment, 3),
+            "project_count": len(unique_projects)
+        }
+
     def _search_google_news(self, query: str) -> list:
         """Google News RSS ile haber arar"""
         try:
@@ -285,16 +336,18 @@ class NewsAnalyzer:
         }
 
     def calculate_news_score(self, symbol: str) -> dict:
-        """Hisse için haber bazlı skor hesaplar"""
+        """Hisse için haber, proje ve politik bazlı skor hesaplar"""
         news = self.get_stock_news(symbol)
         political = self.get_political_impact(symbol)
+        projects = self.get_company_projects(symbol)
 
-        if not news:
+        if not news and not projects.get("project_news"):
             return {
                 "score": 50,
                 "signal": "TUT",
                 "news_count": 0,
-                "description": "Yeterli haber bulunamadı"
+                "project_count": 0,
+                "description": "Yeterli haber/proje bulunamadı"
             }
 
         # Haber sentiment ortalaması
@@ -304,32 +357,42 @@ class NewsAnalyzer:
         else:
             avg_sentiment = 0
 
-        # Politik etki
+        # Politik ve Proje etkileri
         political_sentiment = political.get('political_sentiment', 0)
+        project_sentiment = projects.get('project_sentiment', 0)
+        project_count = projects.get('project_count', 0)
 
-        # Birleşik skor (0-100 arası)
-        combined = (avg_sentiment * 0.6 + political_sentiment * 0.4) * 50 + 50
+        # Birleşik skor (0-100 arası) - Projeler haber skoru içinde %30 ağırlık kazansın
+        # Temel Haber: %40, Politik: %30, Projeler: %30
+        combined = (avg_sentiment * 0.4 + political_sentiment * 0.3 + project_sentiment * 0.3) * 50 + 50
+        
+        # Ekstra proje bonusu: Şirket aktif projeler üretiyorsa skoru yukarı itelim
+        if project_count > 0:
+            combined += (project_count * 2)  # Her yeni ihale/yatırım haberi için 2 puan bonus (Max etki)
+
         combined = max(0, min(100, combined))
 
         if combined >= 65:
             signal = "AL"
-            desc = f"Haberler ve politik gelişmeler olumlu ({len(news)} haber analiz edildi)"
+            desc = f"Yeni {project_count} yatırım/proje haberi! Haberler olumlu." if project_count > 0 else "Haberler ve politik gelişmeler olumlu."
         elif combined <= 35:
             signal = "SAT"
             desc = f"Haberler ve politik gelişmeler olumsuz ({len(news)} haber analiz edildi)"
         else:
             signal = "TUT"
-            desc = f"Haberler nötr ({len(news)} haber analiz edildi)"
+            desc = f"Haberler nötr ({len(news)} genel haber, {project_count} proje)"
 
         return {
             "score": round(combined, 2),
             "signal": signal,
             "news_count": len(news),
+            "project_count": project_count,
             "avg_sentiment": round(avg_sentiment, 3),
             "political_sentiment": round(political_sentiment, 3),
+            "project_sentiment": round(project_sentiment, 3),
             "political_impact": political.get('impact', 'Nötr'),
             "description": desc,
-            "latest_news": news[:5]
+            "latest_news": news[:3] + projects.get('project_news', [])[:2] # Hem normal hem proje haberini harmanla
         }
 
     def _get_stock_sector(self, symbol: str) -> str:

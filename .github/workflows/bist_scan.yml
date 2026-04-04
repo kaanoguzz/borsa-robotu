@@ -13,7 +13,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -28,7 +28,7 @@ jobs:
       - name: Bağımlılıkları Kur
         run: |
           pip install --upgrade pip
-          pip install yfinance pandas numpy scikit-learn xgboost ta textblob feedparser requests python-dotenv joblib beautifulsoup4 pytrends certifi
+          pip install yfinance pandas numpy scikit-learn xgboost ta textblob feedparser requests python-dotenv joblib beautifulsoup4 pytrends certifi GoogleNews
 
       - name: BIST 100 Taraması Başlat
         env:

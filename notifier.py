@@ -38,28 +38,28 @@ class Notifier:
             logger.error(f"Telegram bağlantı hatası: {e}")
             return False
 
-    def send_buy_signal(self, symbol, guven_skoru, risk_seviyesi, fiyat, hedef_fiyat, stop_fiyat, teknik_ozet, hacim_durumu, duygu_skoru):
-        mesaj = f"""🚀 <b>#{symbol} - GÜÇLÜ AL SİNYALİ</b>
+    def send_buy_signal(self, symbol, current_price, target_price, stop_price, onay_notu):
+        mesaj = f"""🟢 <b>ALIM SİNYALİ (Sadece 6/6 Tam Onayda Gönderilir)</b>
+<b>{symbol}</b> - AL
+💰 <b>Anlık Fiyat:</b> {current_price:.2f} TL
+🎯 <b>Hedef Fiyat:</b> {target_price:.2f} TL
+🛑 <b>Zarar Kes:</b> {stop_price:.2f} TL
 
-📊 <b>Güven Skoru:</b> %{guven_skoru} (AI Onayı)
-🛡️ <b>Risk Oranı:</b> {risk_seviyesi}
-💰 <b>Giriş:</b> {fiyat:.2f} TL | 🎯 <b>Hedef:</b> {hedef_fiyat:.2f} TL | 🛑 <b>Stop:</b> {stop_fiyat:.2f} TL
-
-🧠 <b>Neden:</b> {teknik_ozet}
-• Hacim: {hacim_durumu}
-• Duygu: Sosyal Medyada %{duygu_skoru:.0f} pozitif hava.
-
-🏦 <b>Aksiyon:</b> Yapı Kredi'den alımı yap!"""
+{onay_notu}
+(Not: Bu mesaj sadece tüm parametreler onaylandığında düşer.)"""
         return self.send_message(mesaj)
 
-    def send_sell_signal(self, symbol, fiyat, satis_nedeni, kar_zarar_orani, ilerleme_yuzdesi):
-        mesaj = f"""⚠️ <b>#{symbol} - ACİL SAT SİNYALİ</b>
+    def send_sell_signal(self, symbol, fiyat, tahmini_dip, bozulan_parametreler, guncel_bakiye=200, kar_zarar=0):
+        ilerleme = min(100, (guncel_bakiye / 100000) * 100)
+        mesaj = f"""🔴 <b>SATIŞ SİNYALİ (Düşüş Tahmini ve Bozulma Raporu)</b>
+<b>{symbol}</b> - SAT
+📉 <b>Satış Fiyatı:</b> {fiyat:.2f} TL
+🔻 <b>Tahmini Dip:</b> {tahmini_dip:.2f} TL
+📈 <b>Kâr/Zarar:</b> {kar_zarar:+.2f} TL
 
-💰 <b>Satış Fiyatı:</b> {fiyat:.2f} TL
-📉 <b>Neden:</b> {satis_nedeni}
-📈 <b>Gerçekleşen Kâr/Zarar:</b> %{kar_zarar_orani:+.2f}
+❌ <b>Bozulan Parametreler:</b>
+{bozulan_parametreler}
 
 🏁 <b>HEDEF TAKİBİ:</b>
-200 TL -> 100.000 TL yolunda <b>%{ilerleme_yuzdesi:.2f}</b> tamamlandı! 
-Nakit gücünü koru, yeni sinyali bekle."""
+200 TL -> 100.000 TL yolunda bakiye: <b>{guncel_bakiye:.2f} TL</b> (<b>%{ilerleme:.2f}</b> tamamlandı)"""
         return self.send_message(mesaj)

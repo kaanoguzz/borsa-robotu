@@ -168,6 +168,20 @@ def run_cloud_scan():
     holdings = pm.get_portfolio()
     auto_sell_messages = []
     
+    # XU100 5 Dakikalık şelale kontrolü
+    index_crash = False
+    try:
+        import yfinance as yf
+        xu_data = yf.Ticker("XU100.IS").history(period="1d", interval="5m")
+        if len(xu_data) >= 2:
+            last_xu = xu_data['Close'].iloc[-1]
+            prev_xu = xu_data['Close'].iloc[-2]
+            if (last_xu - prev_xu) / prev_xu <= -0.005: # -%0.5
+                index_crash = True
+                logger.warning("🚨 BIST100 ŞELALE DÜŞÜŞÜ ALGILANDI! Tüm pozisyonlarda EJECT devreye girdi.")
+    except Exception as e:
+        logger.error(f"XU100 veri hatasi: {e}")
+    
     if holdings:
         logger.info(f"Oto-Sat kontrolu yapiliyor ({len(holdings)} hisse)...")
         symbols_to_check = [h["symbol"] for h in holdings]
@@ -188,16 +202,29 @@ def run_cloud_scan():
                         current_price = data["Close"].iloc[-1]
                     else:
                         current_price = data[sym]["Close"].iloc[-1]
-                        
+                    # Zirve Değer Takibi ve Önceki Kapanış
+                    peak_data = pm.update_peak_price(sym, current_price)
+                    max_peak = peak_data["max_peak"]
+                    prev_close = peak_data["previous_close"]
+                    
                     target = h.get("target_price", 0)
                     stop = h.get("stop_loss", 0)
                     buy_price = h.get("avg_buy_price", 0)
                     
                     sell_reason = ""
-                    if target > 0 and current_price >= target:
-                        sell_reason = f"🎯 Hedef fiyata ulasti ({target} TL)"
+                    if index_crash:
+                        sell_reason = "🚨 Acil Çıkış: XU100 Şelale Çöküşü (-%0.5)!"
+                    elif max_peak > buy_price and current_price < max_peak * 0.985: # Trailing Stop %1.5
+                        sell_reason = f"📉 İzleyen Stop Patladı (Zirve: {max_peak:.2f}, Fiyat düştü)"
                     elif stop > 0 and current_price <= stop:
                         sell_reason = f"🛑 Stop loss seviyesine indi ({stop} TL)"
+                    elif target > 0 and current_price >= target:
+                        # Tavan Kilidi Kontrolü (+%9 veya üzeri)
+                        if prev_close > 0 and current_price >= prev_close * 1.09:
+                            logger.info(f"🔒 Tavan Kilidi Aktif: {sym} hedefine ulaştı ama tavana kitlendi, satılmıyor!")
+                            pass
+                        else:
+                            sell_reason = f"🎯 Hedef fiyata ulasti ({target} TL)"
                     else:
                         from scanner import Scanner
                         sc = Scanner()
@@ -251,6 +278,11 @@ def run_cloud_scan():
                 # Hedef fiyat hesapla
                 targets = calculate_targets(symbol, result)
 
+                # Sürtünme Kaybı (Friction) Kontrolü (%5.2 barajı)
+                if targets["target_pct"] < 5.2:
+                    logger.info(f"{symbol} HEDEF IPTAL: Beklenen kâr (%{targets['target_pct']}) sürtünme tamponu olan %5.2'yi aşmıyor. WAIT.")
+                    continue
+
                 buy_signals.append({
                     "symbol": symbol,
                     "action": action,
@@ -268,6 +300,7 @@ def run_cloud_scan():
                     "social_score": result.get("social_score", 0),
                     "macro_score": result.get("macro_score", 0),
                     "fundamental_score": result.get("fundamental_score", 0),
+                    "previous_close": result.get("technical", {}).get("previous_close", price)
                 })
                 logger.info(f"[{i+1}/{total}] {symbol}: {action} Skor:{score:.0f} Hedef:{targets['target']:.2f}")
 
@@ -297,15 +330,13 @@ def run_cloud_scan():
         msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
 
         for s in buy_signals[:8]:
-            rr_emoji = "🟢" if s["risk_reward"] >= 2 else ("🟡" if s["risk_reward"] >= 1 else "🔴")
-
-            msg += f"🟢 <b>#{s['symbol']} — {s['action']}</b>\n"
-            msg += f"   💰 Giriş: <b>{s['price']:.2f} TL</b>\n"
-            msg += f"   🎯 Hedef: <b>{s['target']:.2f} TL</b> (+%{s['target_pct']})\n"
-            msg += f"   🛑 Stop: {s['stop']:.2f} TL ({s['stop_pct']}%)\n"
-            msg += f"   {rr_emoji} Risk/Ödül: {s['risk_reward']}x\n"
-            msg += f"   📊 Skor: {s['score']:.0f} (Tek:{s['technical_score']:.0f} ML:{s['ml_score']:.0f} Haber:{s['news_score']:.0f})\n"
-            msg += f"   📝 {s['reason'][:55]}\n\n"
+            msg += f"🟢 <b>ALIM SİNYALİ (6/6 Tam Onay)</b>\n"
+            msg += f"<b>{s['symbol']}</b> - AL\n"
+            msg += f"💰 <b>Anlık Fiyat:</b> {s['price']:.2f} TL\n"
+            msg += f"🎯 <b>Hedef Fiyat:</b> {s['target']:.2f} TL\n"
+            msg += f"🛑 <b>Zarar Kes:</b> {s['stop']:.2f} TL\n\n"
+            msg += f"{s['reason']}\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━\n"
 
         if len(buy_signals) > 8:
             msg += f"... ve {len(buy_signals) - 8} hisse daha.\n\n"
@@ -330,7 +361,8 @@ def run_cloud_scan():
                 pm.add_stock(best["symbol"], qty, price, 
                              target_price=best["target"], 
                              stop_loss=best["stop"], 
-                             notes="Otomatik Alım")
+                             notes="Otomatik Alım",
+                             previous_close=best.get("previous_close", 0))
                 
                 oto_al_msg = (
                     f"🤖 <b>OTO-ALIM GERÇEKLEŞTİ</b>\n\n"

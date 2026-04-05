@@ -27,25 +27,25 @@ class Portfolio:
         with open(self.file, "w") as f:
             json.dump(self.data, f, indent=4)
 
-    def buy(self, symbol, price):
+    def buy(self, symbol, price, previous_close=0):
         komisyon_orani = 0.002
         # Tüm bakiye ile alım
         islem_tutari = self.data["bakiye"]
+        if islem_tutari <= 0:
+            return False, "Yetersiz bakiye"
+
         komisyon = islem_tutari * komisyon_orani
         net_tutar = islem_tutari - komisyon
         
         adet = net_tutar / price
         
-        if net_tutar <= 0:
-            return False, "Yetersiz bakiye"
-            
         self.data["bakiye"] = 0
         self.data["hisseler"][symbol] = {
             "adet": adet,
             "maliyet": price,
-            "en_yuksek_fiyat": price, # Trailing stop için
-            "stop_loss": price * 0.97, # %3 Zarar Kes
-            "trailing_stop": price * 0.98, # %2 İz süren stop ilk seviye
+            "en_yuksek_fiyat": price, # İzleyen stop için
+            "previous_close": previous_close, # Tavan kilidi için
+            "stop_loss": price * 0.97, # Acil Stop
             "alim_tarihi": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
         
@@ -58,7 +58,7 @@ class Portfolio:
             "tarih": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         })
         self.save()
-        return True, adet
+        return True, "Başarılı"
 
     def sell(self, symbol, price, neden=""):
         if symbol not in self.data["hisseler"]:
@@ -93,26 +93,20 @@ class Portfolio:
         ilerleme = (self.data["bakiye"] / self.target) * 100
         return True, net_gelir, kar_zarar_orani, ilerleme
         
-    def update_trailing_stop(self, symbol, current_price):
+    def update_peak_price(self, symbol, current_price):
         if symbol not in self.data["hisseler"]:
-            return False, ""
+            return {"max_peak": current_price, "previous_close": 0}
             
         hisse = self.data["hisseler"][symbol]
         
-        # Fiyat yeni bir zirve yaptıysa trailing stop'u %2 aşağıya güncelle
-        if current_price > hisse["en_yuksek_fiyat"]:
+        if current_price > hisse.get("en_yuksek_fiyat", 0):
             hisse["en_yuksek_fiyat"] = current_price
-            yeni_trailing = current_price * 0.98
-            if yeni_trailing > hisse["trailing_stop"]:
-                hisse["trailing_stop"] = yeni_trailing
-                self.save()
-                
-        # Stop Kontrolleri
-        if current_price <= hisse["stop_loss"]:
-            return True, "Zarar Kes (%3) tetiklendi"
+            self.save()
             
-        if current_price <= hisse["trailing_stop"]:
-            return True, "İz Süren Stop (%2) tetiklendi"
+        return {
+            "max_peak": hisse["en_yuksek_fiyat"], 
+            "previous_close": hisse.get("previous_close", 0)
+        }
             
         return False, ""
         

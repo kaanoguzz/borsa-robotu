@@ -36,7 +36,9 @@ class PortfolioManager:
                 target_price REAL DEFAULT 0,
                 stop_loss REAL DEFAULT 0,
                 notes TEXT DEFAULT '',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                max_peak_price REAL DEFAULT 0,
+                previous_close REAL DEFAULT 0
             )
         """)
 
@@ -116,15 +118,15 @@ class PortfolioManager:
 
     # ==================== PORTFÖY İŞLEMLERİ ====================
 
-    def add_stock(self, symbol: str, quantity: float, buy_price: float, target_price: float = 0, stop_loss: float = 0, notes: str = "") -> dict:
+    def add_stock(self, symbol: str, quantity: float, buy_price: float, target_price: float = 0, stop_loss: float = 0, notes: str = "", previous_close: float = 0) -> dict:
         """Portföye hisse ekler (Otomatik/Yarı otomatik)"""
         conn = self._get_conn()
         cursor = conn.cursor()
 
         try:
             cursor.execute(
-                "INSERT INTO portfolio (symbol, quantity, buy_price, buy_date, target_price, stop_loss, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (symbol.upper(), quantity, buy_price, datetime.now().isoformat(), target_price, stop_loss, notes)
+                "INSERT INTO portfolio (symbol, quantity, buy_price, buy_date, target_price, stop_loss, notes, max_peak_price, previous_close) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (symbol.upper(), quantity, buy_price, datetime.now().isoformat(), target_price, stop_loss, notes, buy_price, previous_close)
             )
             
             # İşlem geçmişine ekle
@@ -212,6 +214,32 @@ class PortfolioManager:
         finally:
             conn.close()
 
+    def update_peak_price(self, symbol: str, current_price: float) -> dict:
+        """Eldeki hissenin en yüksek zirvesini (max_peak_price) günceller ve izleyen stop hesapları için döndürür"""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id, max_peak_price, previous_close FROM portfolio WHERE symbol = ?", (symbol.upper(),))
+        holdings = cursor.fetchall()
+        
+        updated = False
+        highest_peak = 0
+        prev_close_val = 0
+        
+        for hid, max_peak, prev_close in holdings:
+            prev_close_val = max(prev_close_val, prev_close or 0)
+            highest_peak = max(highest_peak, max_peak or 0)
+            if current_price > (max_peak or 0):
+                cursor.execute("UPDATE portfolio SET max_peak_price = ? WHERE id = ?", (current_price, hid))
+                updated = True
+                highest_peak = current_price
+                
+        if updated:
+            conn.commit()
+        conn.close()
+        
+        return {"max_peak": highest_peak, "previous_close": prev_close_val}
+
     def get_portfolio(self) -> list:
         """Tüm portföyü döndürür"""
         conn = self._get_conn()
@@ -223,7 +251,9 @@ class PortfolioManager:
                    MIN(buy_date) as first_buy,
                    AVG(target_price) as target_price,
                    AVG(stop_loss) as stop_loss,
-                   GROUP_CONCAT(notes, '; ') as notes
+                   GROUP_CONCAT(notes, '; ') as notes,
+                   MAX(max_peak_price) as max_peak_price,
+                   AVG(previous_close) as previous_close
             FROM portfolio 
             GROUP BY symbol
             ORDER BY symbol
@@ -239,7 +269,9 @@ class PortfolioManager:
                 "target_price": round(row[4] or 0, 2),
                 "stop_loss": round(row[5] or 0, 2),
                 "total_cost": round(row[1] * row[2], 2),
-                "notes": row[6] or ""
+                "notes": row[6] or "",
+                "max_peak_price": round(row[7] or 0, 2),
+                "previous_close": round(row[8] or 0, 2)
             })
 
         conn.close()

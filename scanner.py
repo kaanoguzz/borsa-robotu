@@ -108,12 +108,17 @@ class Scanner:
     def check_sell_condition(self, symbol):
         """
         Eldeki hisse için Erken Satış Sinyali üretir.
-        15 dakikalık grafikte: Fiyat EMA(5)'in altına inmişse ve RSI < 40 ise
-        veya EMA(5), EMA(20)'yi aşağı kestiyse SAT uyarısı verir.
+        - XU100 Düşüşü (Dışarıdan gelebilir veya burada bakılabilir - dışarıda bakmak daha performanslı)
+        - Hacmin %40 düşmesi
+        - EMA / RSI kesişimleri
+        - Büyük Dağıtım / Kurumsal satıcı (Sentetik AKD)
         """
         try:
             df_15m = self.get_data(symbol, "15m", "5d")
-            if df_15m is None or len(df_15m) < 20:
+            # 5 dakikalık grafikteki şelaleyi daha net görmek için 5m çekelim
+            df_5m = self.get_data(symbol, "5m", "5d")
+            
+            if df_15m is None or len(df_15m) < 20 or df_5m is None or len(df_5m) < 20:
                 return False, ""
                 
             df_15m.ta.rsi(length=14, append=True)
@@ -127,10 +132,35 @@ class Scanner:
             ema20_prev = df_15m['EMA_20'].iloc[-2]
             current_price = df_15m['Close'].iloc[-1]
 
+            # 1. Hacim Çöküşü Kontrolü (Son 5m mumu bir öncekine göre %40 düşükse ve trend aşağı yönlüyse)
+            vol_curr = df_5m['Volume'].iloc[-1]
+            vol_prev = df_5m['Volume'].iloc[-2]
+            # Sadece kırmızı bir mumsa hacim çekilmesi risklidir
+            is_red = df_5m['Close'].iloc[-1] < df_5m['Open'].iloc[-1]
+            if is_red and vol_prev > 0 and vol_curr < vol_prev * 0.6:
+                 return True, "📉 İvme Kaybı: Hacim %40'tan fazla çöktü!"
+
+            # 2. Sentetik Dağıtım / Büyük Satıcılar (MFI ve OBV Şelalesi)
+            try:
+                import pandas_ta as ta
+                mfi = ta.mfi(df_5m['High'], df_5m['Low'], df_5m['Close'], df_5m['Volume'], length=14)
+                obv = ta.obv(df_5m['Close'], df_5m['Volume'])
+                
+                mfi_val = mfi.iloc[-1] if not mfi.empty else 50
+                mfi_prev = mfi.iloc[-2] if not mfi.empty else 50
+                obv_val = obv.iloc[-1] if not obv.empty else 0
+                obv_prev = obv.iloc[-2] if not obv.empty else 0
+
+                # OBV'de sert düşüş ve MFI < 30 ise kurumsal satış var demektir
+                if mfi_val < mfi_prev and mfi_val < 30 and obv_val < obv_prev:
+                     return True, "🐳 Kurumsal Çıkış: AKD Dağıtımı tespit edildi (Smart Money OUT)!"
+            except:
+                pass # TA error handles safely
+
+            # 3. Geleneksel Teknik Kesişim
             crossunder = (ema5_prev >= ema20_prev) and (ema5_curr < ema20_curr)
-            
             if crossunder:
-                return True, f"EMA(5) Ort. Altı Kesişim (Fiyat: {current_price:.2f}, RSI: {rsi:.1f})"
+                return True, f"EMA Kesişimi (Fiyat: {current_price:.2f}, RSI: {rsi:.1f})"
                 
             if current_price < ema5_curr and rsi < 40:
                  return True, f"Fiyat zayıflığı ve hacim kaybı, RSI {rsi:.1f}"

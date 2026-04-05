@@ -88,6 +88,9 @@ class TechnicalAnalyzer:
             # 16. Support & Resistance
             indicators["support_resistance"] = self._calc_support_resistance(df)
 
+            # 17. Önceki Kapanış (Tavan kilidi ve marj hedefi için)
+            indicators["previous_close"] = df['Close'].iloc[-2] if len(df) > 1 else df['Close'].iloc[-1]
+
             # Genel skor hesapla
             indicators["overall_score"] = self._calculate_overall_score(indicators)
             indicators["signal"] = self._generate_signal(indicators["overall_score"])
@@ -651,6 +654,82 @@ class TechnicalAnalyzer:
             "signal": "TUT",
             "score": 50,
             "description": f"Pivot: {pivot:.2f} | S1: {s1:.2f} | R1: {r1:.2f}"
+        }
+
+    def calculate_smart_money(self, df: pd.DataFrame) -> dict:
+        """AKD / Takas Simülatörü: MFI, OBV ve Force Index üzerinden kurumsal para onayı"""
+        if len(df) < 20:
+             return {"approved": False, "reason": "Yetersiz veri"}
+             
+        # 1. MFI (Money Flow Index)
+        try:
+            mfi = ta.volume.MFIIndicator(df['High'], df['Low'], df['Close'], df['Volume']).money_flow_index()
+            mfi_val = mfi.iloc[-1]
+            mfi_prev = mfi.iloc[-5] if len(mfi) > 5 else mfi.iloc[-1]
+        except:
+            mfi_val, mfi_prev = 50, 50
+            
+        # 2. OBV Kırılımı
+        try:
+            obv = ta.volume.OnBalanceVolumeIndicator(df['Close'], df['Volume']).on_balance_volume()
+            obv_sma = obv.rolling(10).mean()
+            obv_breakout = obv.iloc[-1] > obv_sma.iloc[-1] and (obv.iloc[-1] > obv.iloc[-5])
+        except:
+            obv_breakout = False
+            
+        # 3. Force Index
+        try:
+            # $FI = (Kapanış_t - Kapanış_{t-1}) * Hacim
+            close_diff = df['Close'].diff()
+            force_index = close_diff * df['Volume']
+            force_index_sma = force_index.rolling(13).mean()
+            
+            fi_current = force_index.iloc[-1]
+            fi_sma_current = force_index_sma.iloc[-1]
+            fi_strong = fi_current > fi_sma_current and fi_current > 0
+        except:
+            fi_strong = False
+
+        # 4. Hacim anomalisi (Sentetik Balina Tespiti)
+        try:
+            # Son 1 saat (12 adet 5 dakikalık mum, veya veriye göre son 12 mum)
+            last_vol = df['Volume'].iloc[-1]
+            avg_vol_1h = df['Volume'].iloc[-13:-1].mean()
+            price_change = abs((df['Close'].iloc[-1] - df['Close'].iloc[-2]) / df['Close'].iloc[-2] * 100)
+            
+            balina_girisi = (last_vol > avg_vol_1h * 3) and (price_change <= 1.0)
+        except:
+            balina_girisi = False
+
+        kurumsal_onay = False
+        reason = ""
+        balina_notu = ""
+
+        if balina_girisi:
+            kurumsal_onay = True
+            reason = "Hacim Anomalisi Tespit Edildi - Sentetik AKD Onaylı"
+            balina_notu = "🐳 BALİNA ANALİZİ: ✅ (Hacim Anomalisi Tespit Edildi - Sentetik AKD Onaylı)"
+        elif obv_breakout and fi_strong:
+            kurumsal_onay = True
+            reason = "OBV direnci kırıldı ve Force Index hacimli kurumsal alımı onaylıyor."
+        elif mfi_val > mfi_prev and fi_strong:
+            kurumsal_onay = True
+            reason = "MFI dikleşiyor (+Force), yatayda gizli balina toplaması (accumulation) saptandı."
+        elif mfi_val > 60 and obv_breakout:
+            kurumsal_onay = True
+            reason = "Güçlü MFI ve OBV ile Kurumsal (Smart Para) girişi devam ediyor."
+        else:
+            kurumsal_onay = False
+            reason = "Para çıkışı/Dağıtım veya Küçük yatırımcı (Diğer) ağırlıklı hacim."
+
+        return {
+            "approved": kurumsal_onay,
+            "mfi": round(mfi_val, 2),
+            "obv_breakout": obv_breakout,
+            "force_index_strong": fi_strong,
+            "balina_girisi": balina_girisi,
+            "balina_notu": balina_notu,
+            "reason": reason
         }
 
     def _calculate_overall_score(self, indicators: dict) -> float:

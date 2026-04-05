@@ -51,7 +51,18 @@ class BorsaRobotu:
         bakiye = self.portfolio.data['bakiye']
         aktif_hisseler = list(self.portfolio.data['hisseler'].keys())
         
-        # Canlı Fiyat Güncelleme
+        # XU100 5 Dakikalık şelale kontrolü
+        index_crash = False
+        import yfinance as yf
+        try:
+            xu_data = yf.Ticker("XU100.IS").history(period="1d", interval="5m")
+            if len(xu_data) >= 2:
+                if (xu_data['Close'].iloc[-1] - xu_data['Close'].iloc[-2]) / xu_data['Close'].iloc[-2] <= -0.005:
+                    index_crash = True
+        except:
+            pass
+
+        # Canlı Fiyat Güncelleme ve Stop Kontrolü
         aktif_deger = 0
         hisse_durumlari = ""
         for h in aktif_hisseler:
@@ -60,15 +71,56 @@ class BorsaRobotu:
                 curr_price_data = self.dc.get_current_price(h)
                 if curr_price_data:
                     curr_price = curr_price_data["price"]
-                    # Trailing Stop Kontrolü
-                    satis_durumu, neden = self.portfolio.update_trailing_stop(h, curr_price)
+                    # Zirve ve Tavan Takibi
+                    peak_data = self.portfolio.update_peak_price(h, curr_price)
+                    max_peak = peak_data["max_peak"]
+                    prev_close = peak_data["previous_close"]
+                    
+                    target = self.portfolio.data["hisseler"][h].get("hedef", 0)
+                    stop = self.portfolio.data["hisseler"][h].get("stop", 0)
+                    maliyet = self.portfolio.data["hisseler"][h]["maliyet"]
+                    
+                    # Satış Kontrolü
+                    satis_durumu = False
+                    neden = ""
+                    
+                    if index_crash:
+                        satis_durumu = True
+                        neden = "Acil Çıkış: XU100 Şelale Çöküşü (-%0.5)!"
+                    elif max_peak > maliyet and curr_price < max_peak * 0.985:
+                        satis_durumu = True
+                        neden = f"İzleyen Stop Patladı (Zirve: {max_peak:.2f}, Fiyat Düştü)"
+                    elif stop > 0 and curr_price <= stop:
+                        satis_durumu = True
+                        neden = f"Acil Durum: Stop loss seviyesine indi ({stop} TL)"
+                    elif target > 0 and curr_price >= target:
+                        if prev_close > 0 and curr_price >= prev_close * 1.09:
+                            self.add_log(f"🔒 Tavan Kilidi: {h} hedefe ulaştı ama kitlendi, satılmıyor!", "bold cyan")
+                        else:
+                            satis_durumu = True
+                            neden = f"Hedef fiyata ulaştı ({target} TL)"
+                    else:
+                        from scanner import Scanner
+                        sc = Scanner()
+                        tech_sell_signal, tech_sell_reason = sc.check_sell_condition(h)
+                        if tech_sell_signal:
+                            satis_durumu = True
+                            neden = f"Aktif Defans: {tech_sell_reason}"
+
                     if satis_durumu:
                         self.add_log(f"🚨 {h} SATIŞ: {neden}", "bold red")
                         basari, net, kzo, ilerleme = self.portfolio.sell(h, curr_price, neden)
                         if basari:
-                            self.notifier.send_sell_signal(h, curr_price, neden, kzo, ilerleme)
+                            tahmini_dip = curr_price * 0.97
+                            self.notifier.send_sell_signal(
+                                symbol=h, 
+                                fiyat=curr_price, 
+                                tahmini_dip=tahmini_dip, 
+                                bozulan_parametreler=neden,
+                                guncel_bakiye=self.portfolio.get_balance(),
+                                kar_zarar=net
+                            )
                     else:
-                        maliyet = self.portfolio.data["hisseler"][h]["maliyet"]
                         kz = ((curr_price - maliyet)/maliyet)*100
                         renk = "green" if kz >= 0 else "red"
                         hisse_durumlari += f"[{renk}]{h} : {curr_price:.2f} TL (%{kz:+.2f})[/{renk}] "
@@ -137,14 +189,10 @@ class BorsaRobotu:
                                     # Bildirim Gönder
                                     self.notifier.send_buy_signal(
                                         symbol=sym,
-                                        guven_skoru=round(skor, 1),
-                                        risk_seviyesi="Düşük/Orta",
-                                        fiyat=price,
-                                        hedef_fiyat=price * 1.05,
-                                        stop_fiyat=price * 0.97,
-                                        teknik_ozet=f"RSI({rsi:.1f}) & EMA Kesişimi, 4S Trend Onaylı",
-                                        hacim_durumu="Normal/Aşırı Değil",
-                                        duygu_skoru=skor
+                                        current_price=price,
+                                        target_price=price * 1.05,
+                                        stop_price=price * 0.97,
+                                        onay_notu="✅ Teknik ✅ Hacim ✅ AKD ✅ Haber ✅ Makro ✅ Risk"
                                     )
                                     break # Bir hisse aldık, beklemeye geç!
                             else:
@@ -161,9 +209,16 @@ class BorsaRobotu:
                             curr_price_data = self.dc.get_current_price(h)
                             c_price = curr_price_data['price'] if curr_price_data else self.portfolio.data["hisseler"][h]["maliyet"]
                             self.add_log(f"📉 {h} TEKNİK SAT: {sell_reason}", "bold red")
-                            basari, net, kzo, ilerleme = self.portfolio.sell(h, c_price, f"Teknik Sat: {sell_reason}")
+                            tahmini_dip = c_price * 0.97
                             if basari:
-                                self.notifier.send_sell_signal(h, c_price, sell_reason, kzo, ilerleme)
+                                self.notifier.send_sell_signal(
+                                    symbol=h, 
+                                    fiyat=c_price, 
+                                    tahmini_dip=tahmini_dip, 
+                                    bozulan_parametreler=sell_reason,
+                                    guncel_bakiye=self.portfolio.get_balance(),
+                                    kar_zarar=net
+                                )
 
                 live.update(self.create_layout())
                 

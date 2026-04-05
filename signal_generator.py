@@ -170,15 +170,23 @@ class SignalGenerator:
             technical_score = 50
             result["technical_score"] = 50
 
-        # Hacim onayı (Para girişi var mı?)
+        # ========== KATMAN 2 & 3: HACİM VE AKD / TAKAS (SMART MONEY) ==========
         try:
             obv_data = technical.get("obv_trend", {})
             volume_data = self._check_volume_confirmation(df)
             result["volume_confirmation"] = volume_data
             money_flowing = volume_data.get("confirmed", False)
             result["checklist"]["money_flowing_in"] = money_flowing
+            
+            smart_money = self.technical_analyzer.calculate_smart_money(df)
+            result["smart_money"] = smart_money
+            akd_approved = smart_money.get("approved", False)
+            result["checklist"]["akd_approved"] = akd_approved
         except Exception as e:
             result["checklist"]["money_flowing_in"] = False
+            result["checklist"]["akd_approved"] = False
+            money_flowing = False
+            akd_approved = False
 
         # ========== KATMAN 3: ML TAHMİN ==========
         if not quick_mode:
@@ -247,21 +255,60 @@ class SignalGenerator:
         )
         result["overall_score"] = round(overall_score, 2)
 
-        # ========== SİNYAL ÜRETİMİ ==========
-        signal = self._generate_final_signal(
-            overall_score, technical_score, news_score, ml_score,
-            result["checklist"], market_bullish, sector_healthy
-        )
+        # ========== VETO SİSTEMİ (6/6 ONAY KONTROLÜ) ==========
+        veto_akd = result["checklist"].get("akd_approved", False)
+        veto_hacim = result["checklist"].get("money_flowing_in", False)
+        veto_makro = market_bullish
+        veto_duygu = social_score < 85  # Aşırı Pump (85 üstü) riskli sayılır
+        veto_haber = result["checklist"].get("news_clean", True)
+        veto_teknik = technical_score >= 60
+
+        veto_passed = veto_akd and veto_hacim and veto_makro and veto_duygu and veto_haber and veto_teknik
+
+        failed_params = []
+        if not veto_teknik: failed_params.append("Teknik")
+        if not veto_hacim: failed_params.append("Hacim")
+        if not veto_akd: failed_params.append("AKD/Takas")
+        if not veto_haber: failed_params.append("Haber")
+        if not veto_makro: failed_params.append("Makro")
+        if not veto_duygu: failed_params.append("Risk (Pump)")
+
+        if overall_score >= 60 and veto_passed:
+            raw_action = "GÜÇLÜ AL"
+            emoji = "🟢"
+            onay_notu = "✅ Teknik ✅ Hacim ✅ AKD ✅ Haber ✅ Makro ✅ Risk"
+            balina_notu = result.get("smart_money", {}).get("balina_notu", "")
+            if balina_notu:
+                onay_notu += f"\n\n{balina_notu}"
+            reason = onay_notu
+        elif overall_score <= 40 or (overall_score >= 60 and not veto_passed):
+            raw_action = "SAT"
+            emoji = "🔴"
+            reason = "❌ Bozulan Parametreler: " + ", ".join(failed_params)
+        else:
+            raw_action = "TUT"
+            emoji = "🟡"
+            reason = "Nötr pozisyon."
+
+        signal = {
+            "action": raw_action,
+            "emoji": emoji,
+            "confidence": "Yüksek" if veto_passed else "Düşük",
+            "reason": reason,
+            "checklist": result["checklist"],
+            "all_clear": veto_passed,
+            "failed_params": failed_params,
+            "onay_notu": onay_notu if veto_passed else ""
+        }
 
         # Güven skoru kontrolü
         confidence_score = result.get("backtest", {}).get("confidence_score", 0)
-        notification_allowed = confidence_score >= self.min_confidence_score
+        notification_allowed = confidence_score >= self.min_confidence_score and veto_passed
         signal["notification_allowed"] = notification_allowed
         signal["confidence_score"] = confidence_score
+        
         if not notification_allowed and not result.get("backtest", {}).get("skipped"):
-            signal["notification_blocked_reason"] = (
-                f"Güven skoru %{confidence_score:.1f} < %{self.min_confidence_score:.0f}. Bildirim gönderilmeyecek."
-            )
+            signal["notification_blocked_reason"] = f"VETO'ya takıldı veya Güven Skoru yetersiz."
 
         result["signal"] = signal
 

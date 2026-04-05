@@ -64,6 +64,50 @@ class Notifier:
 200 TL -> 100.000 TL yolunda bakiye: <b>{guncel_bakiye:.2f} TL</b> (<b>%{ilerleme:.2f}</b> tamamlandı)"""
         return self.send_message(mesaj)
 
+    def send_analysis_report(self, data: dict):
+        """Hisse analiz raporunu gönderir"""
+        symbol = data.get("symbol", "N/A")
+        price = data.get("price", 0)
+        score = data.get("overall_score", 0)
+        reason = data.get("reason", "Veri yok")
+        
+        emoji = "🟢" if score > 70 else "🟡" if score > 50 else "🔴"
+        
+        mesaj = f"""{emoji} <b>{symbol} - ANLIK ANALİZ RAPORU</b>
+💰 <b>Fiyat:</b> {price:.2f} TL
+📊 <b>Güven Skoru:</b> %{score:.1f}
+
+🧠 <b>Botun Yorumu:</b>
+<i>{reason}</i>
+
+📈 <b>Teknik Detaylar:</b>
+• Hedef: {data.get('target', 0):.2f} TL
+• Stop: {data.get('stop', 0):.2f} TL
+• RSI: {data.get('rsi', 0):.1f}
+• Trend: {data.get('trend', 'Belirsiz')}
+
+🔍 <i>Bu analiz 15 indikatör ve güncel haberler taranarak oluşturulmuştur.</i>"""
+        return self.send_message(mesaj)
+
+    def send_market_pulse(self, data: dict):
+        """Borsa genel durum (Endeks Nabız) raporu"""
+        price = data.get("price", 0)
+        change = data.get("change", 0)
+        risk = data.get("risk_level", "DÜŞÜK")
+        
+        emoji = "🛡️" if "DÜŞÜK" in risk else "⚠️" if "ORTA" in risk else "🚨"
+        
+        mesaj = f"""{emoji} <b>BIST 100 - ENDEKS NABIZ RAPORU</b>
+📈 <b>XU100 Değeri:</b> {price:.2f}
+📉 <b>Günlük Değişim:</b> {change:+.2f}%
+📊 <b>Şelale Riski:</b> {risk}
+
+📝 <b>Durum Analizi:</b>
+{data.get('comment', 'Piyasada normal seyir devam ediyor.')}
+
+🔍 <i>Haftalık %70 kâr hedefi için piyasa yönü takibindedir.</i>"""
+        return self.send_message(mesaj)
+
     def get_updates(self, offset=None):
         """Yeni mesajları getirir"""
         url = f"https://api.telegram.org/bot{self.token}/getUpdates"

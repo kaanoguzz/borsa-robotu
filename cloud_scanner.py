@@ -175,6 +175,8 @@ def process_user_commands(pm, notifier, dc):
     # Eylemler: al, aldim, aldik, buy | sat, sattim, sattik, sell
     buy_pattern = re.compile(r"([a-z0-9]+)\s*(\d+[\.,]\d+)?\s*(al|aldim|aldik|buy)$")
     sell_pattern = re.compile(r"([a-z0-9]+)\s*(sat|sattim|sattik|sell)$")
+    analyze_pattern = re.compile(r"([a-z0-9]+)\s*(ne durumda|analiz|durum)$")
+    market_pattern = re.compile(r"^(endeks|xu100|piyasa|borsa)$")
 
     max_id = offset
     for update in updates:
@@ -193,33 +195,97 @@ def process_user_commands(pm, notifier, dc):
         # Metni normalize et (Küçük harf + Türkçe karakter temizliği)
         text = normalize_text(raw_text)
 
-        # YARDIM KOMUTU
-        if text in ["yardim", "help", "/start", "merhaba", "selam"]:
-            help_msg = "🤖 <b>Borsa Robotu Komut Listesi:</b>\n\n" \
-                       "✅ <b>Alım Kaydı:</b> <code>[HISSE] aldim</code>\n" \
-                       "📍 <i>Örn: thyao aldim</i> (Canlı fiyattan ekler)\n" \
-                       "📍 <i>Örn: asels 62.50 al</i> (Belirli fiyattan ekler)\n\n" \
-                       "❌ <b>Satış Kaydı:</b> <code>[HISSE] sattim</code>\n" \
-                       "📍 <i>Örn: garan sattim</i>\n\n" \
-                       "💰 <b>Bakiye Güncelle:</b> <code>bakiyemiz [TUTAR]</code>\n" \
-                       "📍 <i>Örn: bakiyemiz 2500</i>\n\n" \
-                       "📊 <b>Durum:</b> <code>portfoy</code> veya <code>durum</code>"
+        # YARDIM KOMUTU (TAM FONKSİYON LİSTESİ)
+        if text in ["yardim", "help", "/start", "merhaba", "selam", "komutlar"]:
+            help_msg = "🤖 <b>BORSA ROBOTU - YETENEK LİSTESİ</b>\n\n" \
+                       "📊 <b>ANALİZ & SORGULAMA</b>\n" \
+                       "• <code>[HISSE] ne durumda?</code> -> Anlık teknik/duygu analizi\n" \
+                       "• <code>endeks</code> -> Borsa genel yönü ve Şelale Riski\n" \
+                       "• <code>durum</code> -> Portföy detayı ve ilerleme çubuğu\n\n" \
+                       "✅ <b>İŞLEM KAYDI</b>\n" \
+                       "• <code>[HISSE] aldim</code> -> Portföye ekler\n" \
+                       "• <code>[HISSE] [FIYAT] al</code> -> Fiyatlı ekler\n" \
+                       "• <code>[HISSE] sattim</code> -> Portföyden çıkarır (K/Z hesaplar)\n\n" \
+                       "💰 <b>KASA YÖNETİMİ</b>\n" \
+                       "• <code>bakiyemiz [TUTAR]</code> -> Nakit bakiyeyi set eder\n\n" \
+                       "🎯 <b>HEDEF:</b> 200 TL -> 100.000 TL\n" \
+                       "<i>Ben 24 saat nöbetteyim, piyasayı taramaya devam ediyorum.</i>"
             notifier.send_message(help_msg)
             continue
 
-        # PORTFÖY DURUMU
+        # PORTFÖY DURUMU (GELİŞMİŞ)
         if text in ["portfoy", "durum", "bakiye"]:
             bakiye = pm.get_balance()
             holdings = pm.get_holdings_dict()
-            msg = f"💰 <b>Güncel Bakiye:</b> {bakiye:.2f} TL\n"
+            msg = f"💰 <b>Kasa:</b> {bakiye:.2f} TL\n"
             if holdings:
-                msg += "💼 <b>Eldeki Hisseler:</b>\n"
+                msg += "💼 <b>Aktif Pozisyonlar:</b>\n"
                 for s, d in holdings.items():
-                    msg += f"• {s}: {d['adet']:.2f} adet (Maliyet: {d['maliyet']:.2f})\n"
+                    # Zirve takibi bilgisi ekle
+                    curr_data = dc.get_current_price(s)
+                    price = curr_data.get("price", d["maliyet"])
+                    peak_data = pm.update_peak_price(s, price)
+                    
+                    kar_zarar_yuzde = ((price - d["maliyet"]) / d["maliyet"]) * 100
+                    peak_dist = ((peak_data["max_peak"] - price) / peak_data["max_peak"]) * 100 if peak_data["max_peak"] > 0 else 0
+                    
+                    msg += f"• <b>#{s}</b>: {d['adet']:.0f} ad. ({kar_zarar_yuzde:+.1f}%)\n"
+                    msg += f"   📍 Zirve: {peak_data['max_peak']:.2f} (Uzaklık: %{peak_dist:.1f})\n"
             else:
                 msg += "💼 Portföy şu an boş (Nakitte)."
+            
+            # İlerleme Barı
+            toplam_varlik = bakiye + sum(d["adet"] * dc.get_current_price(s).get("price", d["maliyet"]) for s, d in holdings.items())
+            ilerleme = (toplam_varlik / 100000) * 100
+            msg += f"\n🏁 <b>İlerleme:</b> %{ilerleme:.2f} / 100.000 TL"
             notifier.send_message(msg)
             continue
+
+        # ENDEKS NABIZ
+        if market_pattern.match(text):
+            try:
+                xu100 = dc.get_current_price("XU100.IS")
+                price = xu100.get("price", 0)
+                change = xu100.get("change_percent", 0)
+                risk = "YÜKSEK (Şelale Riski! 🚨)" if change < -0.4 else "ORTA ⚠️" if change < -0.2 else "DÜŞÜK 🛡️"
+                
+                pulse_data = {
+                    "price": price,
+                    "change": change,
+                    "risk_level": risk,
+                    "comment": "Endeks direnç seviyesinde." if change > 0 else "Destek seviyeleri takip ediliyor."
+                }
+                notifier.send_market_pulse(pulse_data)
+                continue
+            except:
+                pass
+
+        # HİSSE ANALİZ (İLERİ SEVİYE)
+        analyze_match = analyze_pattern.match(text)
+        if analyze_match:
+            symbol = analyze_match.group(1).upper()
+            notifier.send_message(f"🔍 <b>{symbol}</b> için 4 katmanlı derin analiz başlatıldı, lütfen bekleyiniz efendim...")
+            
+            try:
+                from signal_generator import SignalGenerator
+                sg = SignalGenerator()
+                report = sg.analyze_stock(symbol, quick_mode=True)
+                
+                analysis_data = {
+                    "symbol": symbol,
+                    "price": report.get("price", 0),
+                    "overall_score": report.get("overall_score", 0),
+                    "reason": report.get("signal", {}).get("reason", "Hisse stabil."),
+                    "target": report.get("target", price * 1.05), # Fallback if target calculations fail
+                    "stop": report.get("stop", price * 0.97),
+                    "rsi": report.get("technical_analysis", {}).get("rsi", 0),
+                    "trend": report.get("technical_analysis", {}).get("trend", "Yatay")
+                }
+                notifier.send_analysis_report(analysis_data)
+                continue
+            except Exception as e:
+                notifier.send_message(f"❌ {symbol} analizi sırasında bir hata oluştu: {str(e)}")
+                continue
 
         # BAKİYE GÜNCELLEME KOMUTU
         # Örnek: "bakiyemiz 250 tl" veya "bakiye 1000"

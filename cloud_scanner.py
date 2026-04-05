@@ -136,6 +136,20 @@ def calculate_targets(symbol: str, result: dict) -> dict:
 
 
 # ==================== TELEGRAM KOMUT DİNLEYİCİ ====================
+def normalize_text(text: str) -> str:
+    """Türkçe karakterleri normalize eder ve küçük harfe çevirir"""
+    translation_table = str.maketrans(
+        "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ",
+        "abccdefgghiijklmnoöprsstuüvyz"
+    )
+    # Önce özel Türkçe karakter dönüşümleri
+    text = text.replace("İ", "i").replace("I", "ı").lower()
+    # Sonra standart tablo (güvenlik için)
+    # Ama aslında hedefimiz 'aldim' ile 'aldım'ı aynı kefeye koymak
+    text = text.replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c")
+    return text.strip()
+
+# ==================== TELEGRAM KOMUT DİNLEYİCİ ====================
 def process_user_commands(pm, notifier, dc):
     """Telegram'dan gelen kullanıcı komutlarını (Hisse aldım/sattım) işler"""
     offset_file = "telegram_offset.txt"
@@ -152,23 +166,53 @@ def process_user_commands(pm, notifier, dc):
         return
 
     import re
-    # Örnek: "THYAO aldim" veya "ASELS 31.50 aldim"
     # Grup 1: Sembol, Grup 2: Fiyat (Opsiyonel), Grup 3: Eylem
-    buy_pattern = re.compile(r"([A-Z0-9]+)\s*(\d+[\.,]\d+)?\s*(aldim|aldım|al)$", re.IGNORECASE)
-    sell_pattern = re.compile(r"([A-Z0-9]+)\s*(sattim|sattım|sat)$", re.IGNORECASE)
+    # Normalize edilmiş metin üzerinden çalışacak
+    # Eylemler: al, aldim, aldik, buy | sat, sattim, sattik, sell
+    buy_pattern = re.compile(r"([a-z0-9]+)\s*(\d+[\.,]\d+)?\s*(al|aldim|aldik|buy)$")
+    sell_pattern = re.compile(r"([a-z0-9]+)\s*(sat|sattim|sattik|sell)$")
 
     max_id = offset
     for update in updates:
         max_id = max(max_id, update.get("update_id", 0))
         message = update.get("message", {})
         chat_id = str(message.get("chat", {}).get("id", ""))
-        text = message.get("text", "").strip()
+        raw_text = message.get("text", "").strip()
 
         # Sadece yetkili CHAT_ID'den gelen mesajları işle
         if chat_id != str(os.getenv("TELEGRAM_CHAT_ID")):
             continue
 
-        if not text:
+        if not raw_text:
+            continue
+            
+        # Metni normalize et (Küçük harf + Türkçe karakter temizliği)
+        text = normalize_text(raw_text)
+
+        # YARDIM KOMUTU
+        if text in ["yardim", "help", "/start", "merhaba", "selam"]:
+            help_msg = "🤖 <b>Borsa Robotu Komut Listesi:</b>\n\n" \
+                       "✅ <b>Alım Kaydı:</b> <code>[HISSE] aldim</code>\n" \
+                       "📍 <i>Örn: thyao aldim</i> (Canlı fiyattan ekler)\n" \
+                       "📍 <i>Örn: asels 62.50 al</i> (Belirli fiyattan ekler)\n\n" \
+                       "❌ <b>Satış Kaydı:</b> <code>[HISSE] sattim</code>\n" \
+                       "📍 <i>Örn: garan sattim</i>\n\n" \
+                       "📊 <b>Durum:</b> <code>portfoy</code> veya <code>durum</code>"
+            notifier.send_message(help_msg)
+            continue
+
+        # PORTFÖY DURUMU
+        if text in ["portfoy", "durum", "bakiye"]:
+            bakiye = pm.get_balance()
+            holdings = pm.get_holdings_dict()
+            msg = f"💰 <b>Güncel Bakiye:</b> {bakiye:.2f} TL\n"
+            if holdings:
+                msg += "💼 <b>Eldeki Hisseler:</b>\n"
+                for s, d in holdings.items():
+                    msg += f"• {s}: {d['adet']:.2f} adet (Maliyet: {d['maliyet']:.2f})\n"
+            else:
+                msg += "💼 Portföy şu an boş (Nakitte)."
+            notifier.send_message(msg)
             continue
 
         # ALIM KOMUTU

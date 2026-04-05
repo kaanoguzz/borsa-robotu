@@ -121,14 +121,16 @@ class PortfolioManager:
     def update_balance(self, amount_change: float) -> float:
         """Bakiyeyi günceller (alım için negatif, satım için pozitif amount_change)"""
         current = self.get_balance()
-        new_balance = current + amount_change
-        
+        return self.set_balance(current + amount_change)
+
+    def set_balance(self, new_amount: float) -> float:
+        """Bakiyeyi verilen değere doğrudan set eder"""
         conn = self._get_conn()
         cursor = conn.cursor()
-        cursor.execute("UPDATE balance SET amount = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1", (new_balance,))
+        cursor.execute("UPDATE balance SET amount = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1", (new_amount,))
         conn.commit()
         conn.close()
-        return new_balance
+        return new_amount
 
     # ==================== PORTFÖY İŞLEMLERİ ====================
 
@@ -253,9 +255,10 @@ class PortfolioManager:
                 cursor.execute("UPDATE portfolio SET max_peak_price = ? WHERE id = ?", (current_price, hid))
                 updated = True
                 highest_peak = current_price
-                
+        
         if updated:
             conn.commit()
+
         conn.close()
         
         return {"max_peak": highest_peak, "previous_close": prev_close_val}

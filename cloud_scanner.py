@@ -201,6 +201,8 @@ def process_user_commands(pm, notifier, dc):
                        "📍 <i>Örn: asels 62.50 al</i> (Belirli fiyattan ekler)\n\n" \
                        "❌ <b>Satış Kaydı:</b> <code>[HISSE] sattim</code>\n" \
                        "📍 <i>Örn: garan sattim</i>\n\n" \
+                       "💰 <b>Bakiye Güncelle:</b> <code>bakiyemiz [TUTAR]</code>\n" \
+                       "📍 <i>Örn: bakiyemiz 2500</i>\n\n" \
                        "📊 <b>Durum:</b> <code>portfoy</code> veya <code>durum</code>"
             notifier.send_message(help_msg)
             continue
@@ -218,6 +220,20 @@ def process_user_commands(pm, notifier, dc):
                 msg += "💼 Portföy şu an boş (Nakitte)."
             notifier.send_message(msg)
             continue
+
+        # BAKİYE GÜNCELLEME KOMUTU
+        # Örnek: "bakiyemiz 250 tl" veya "bakiye 1000"
+        bakiye_pattern = re.compile(r"(bakiyemiz|bakiye|kasa)\s*(\d+[\.,]\d+|\d+)\s*(tl|₺)?$", re.IGNORECASE)
+        bakiye_match = bakiye_pattern.match(text)
+        if bakiye_match:
+            try:
+                new_bal = float(bakiye_match.group(2).replace(",", "."))
+                pm.set_balance(new_bal)
+                notifier.send_message(f"💰 <b>Tamamdır efendim, bakiyeniz {new_bal:.2f} TL olarak güncellendi.</b>\n🏁 Hedef takibindeki ilerleme barı buna göre ayarlanıyor.")
+                logger.info(f"Telegram Komutu: Bakiye guncellendi: {new_bal}")
+                continue
+            except Exception as e:
+                logger.error(f"Bakiye guncelleme hatasi: {e}")
 
         # ALIM KOMUTU
         buy_match = buy_pattern.match(text)

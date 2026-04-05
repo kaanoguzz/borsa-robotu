@@ -17,6 +17,7 @@ from brain import Brain
 from notifier import Notifier
 from portfolio import PortfolioManager as Portfolio
 from data_collector import DataCollector
+from cloud_scanner import process_user_commands
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 logging.getLogger("pandas_ta").setLevel(logging.CRITICAL)
@@ -142,6 +143,13 @@ class BorsaRobotu:
                 subprocess.run(["git", "pull", "origin", "main"], capture_output=True, timeout=5)
             except:
                 pass
+
+        # TELGRAM KOMUTLARINI ANLIK DİNLE (Local'de anlık yanıt için)
+        try:
+            # Gerekli nesneleri oluştur (main.py başlatılırken de oluşturulabilir ama bağımsızlık için burada)
+            process_user_commands(self.portfolio, self.notifier, self.dc)
+        except:
+            pass
                 
         toplam_varlik = bakiye + aktif_deger
         ilerleme = (toplam_varlik / self.portfolio.target) * 100

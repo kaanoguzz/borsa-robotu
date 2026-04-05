@@ -143,13 +143,6 @@ class BorsaRobotu:
                 subprocess.run(["git", "pull", "origin", "main"], capture_output=True, timeout=5)
             except:
                 pass
-
-        # TELGRAM KOMUTLARINI ANLIK DİNLE (Local'de anlık yanıt için)
-        try:
-            # Gerekli nesneleri oluştur (main.py başlatılırken de oluşturulabilir ama bağımsızlık için burada)
-            process_user_commands(self.portfolio, self.notifier, self.dc)
-        except:
-            pass
                 
         toplam_varlik = bakiye + aktif_deger
         ilerleme = (toplam_varlik / self.portfolio.target) * 100
@@ -275,8 +268,14 @@ class BorsaRobotu:
                 live.update(self.create_layout())
                 
                 # 300 saniye (5 dakika) boyunca canlı arayüzü güncel tutarak bekle
-                for _ in range(300):
+                # 300 saniye boyunca her 5 saniyede bir Telegram komutlarını kontrol et
+                for i in range(300):
                     time.sleep(1)
+                    if i % 5 == 0: # 5 saniyede bir bak
+                        try:
+                            process_user_commands(self.portfolio, self.notifier, self.dc)
+                        except:
+                            pass
                     live.update(self.create_layout())
 
 if __name__ == "__main__":

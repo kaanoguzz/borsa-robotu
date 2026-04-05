@@ -138,11 +138,10 @@ def calculate_targets(symbol: str, result: dict) -> dict:
 # ==================== TELEGRAM KOMUT DİNLEYİCİ ====================
 def normalize_text(text: str) -> str:
     """Türkçe karakterleri normalize eder ve küçük harfe çevirir"""
-    translation_table = str.maketrans(
-        "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ",
-        "abccdefgghiijklmnoöprsstuüvyz"
-    )
-    # Önce özel Türkçe karakter dönüşümleri
+    # Önce küçük harf ve Türkçe karakter dönüşümleri (BU ÇOK ÖNEMLİ!)
+    text = text.replace("İ", "i").replace("I", "ı").lower()
+    text = text.replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c")
+    
     # Bazı özel boşluklu kalıpları basitleştir (Noktalama işaretlerinden ÖNCE yapalım)
     text = text.replace("elimizde ne var", "portfoy").replace("ne var", "portfoy")
     text = text.replace("ne durumdayiz", "portfoy").replace("durum ne", "portfoy")
@@ -172,11 +171,12 @@ def process_user_commands(pm, notifier, dc):
     import re
     # Grup 1: Sembol, Grup 2: Fiyat (Opsiyonel), Grup 3: Eylem
     # Normalize edilmiş metin üzerinden çalışacak
-    # Eylemler: al, aldim, aldik, buy | sat, sattim, sattik, sell
-    buy_pattern = re.compile(r"([a-z0-9]+)\s*(\d+[\.,]\d+)?\s*(al|aldim|aldik|buy)$")
-    sell_pattern = re.compile(r"([a-z0-9]+)\s*(sat|sattim|sattik|sell)$")
-    analyze_pattern = re.compile(r"([a-z0-9]+)\s*(ne durumda|analiz|durum)$")
-    market_pattern = re.compile(r"^(endeks|xu100|piyasa|borsa)$")
+    # Desteklenenler: "thyao al", "thyao 300 al", "thyao 300.50 tl aldim"
+    buy_pattern = re.compile(r"([a-z0-9]+)\s*(\d+[\.,]\d*|\d+)?\s*(?:tl|₺)?\s*(al|aldim|aldik|buy)$")
+    sell_pattern = re.compile(r"([a-z0-9]+)\s*(\d+[\.,]\d*|\d+)?\s*(?:tl|₺)?\s*(sat|sattim|sattik|sell)$")
+    analyze_pattern = re.compile(r"([a-z0-9]+)\s*(ne durumda|analiz|durum|yorumu?|durum nedir)$")
+    market_pattern = re.compile(r"^(endeks|xu100|piyasa|borsa|durum ne)$")
+    bakiye_pattern = re.compile(r"(bakiyemiz|bakiye|kasa)\s*(\d+[\.,]\d+|\d+)\s*(tl|₺)?$")
 
     max_id = offset
     for update in updates:
@@ -268,28 +268,28 @@ def process_user_commands(pm, notifier, dc):
             
             try:
                 from signal_generator import SignalGenerator
-                sg = SignalGenerator()
-                report = sg.analyze_stock(symbol, quick_mode=True)
+                sg_temp = SignalGenerator()
+                report = sg_temp.analyze_stock(symbol, quick_mode=True)
                 
+                curr_price = report.get("price", 0)
                 analysis_data = {
                     "symbol": symbol,
-                    "price": report.get("price", 0),
+                    "price": curr_price,
                     "overall_score": report.get("overall_score", 0),
                     "reason": report.get("signal", {}).get("reason", "Hisse stabil."),
-                    "target": report.get("target", price * 1.05), # Fallback if target calculations fail
-                    "stop": report.get("stop", price * 0.97),
+                    "target": report.get("target", curr_price * 1.05),
+                    "stop": report.get("stop", curr_price * 0.97),
                     "rsi": report.get("technical_analysis", {}).get("rsi", 0),
                     "trend": report.get("technical_analysis", {}).get("trend", "Yatay")
                 }
                 notifier.send_analysis_report(analysis_data)
                 continue
             except Exception as e:
-                notifier.send_message(f"❌ {symbol} analizi sırasında bir hata oluştu: {str(e)}")
+                logger.error(f"Analiz hatasi: {e}")
+                notifier.send_message(f"❌ {symbol} analizi sırasında bir hata oluştu. Lütfen tekrar deneyiniz.")
                 continue
 
         # BAKİYE GÜNCELLEME KOMUTU
-        # Örnek: "bakiyemiz 250 tl" veya "bakiye 1000"
-        bakiye_pattern = re.compile(r"(bakiyemiz|bakiye|kasa)\s*(\d+[\.,]\d+|\d+)\s*(tl|₺)?$", re.IGNORECASE)
         bakiye_match = bakiye_pattern.match(text)
         if bakiye_match:
             try:
@@ -307,7 +307,7 @@ def process_user_commands(pm, notifier, dc):
             symbol = buy_match.group(1).upper()
             price_str = buy_match.group(2)
             
-            # Canlı fiyatı al (fiyat belirtilmediyse)
+            # Belirtilen fiyat varsa onu kullan, yoksa canlı fiyatı al
             if price_str:
                 price = float(price_str.replace(",", "."))
             else:
@@ -344,12 +344,18 @@ def process_user_commands(pm, notifier, dc):
         sell_match = sell_pattern.match(text)
         if sell_match:
             symbol = sell_match.group(1).upper()
+            price_str = sell_match.group(2)
             
             # Portföyde var mı?
             holdings = pm.get_holdings_dict()
             if symbol in holdings:
-                price_data = dc.get_current_price(symbol)
-                price = price_data["price"] if price_data else holdings[symbol]["maliyet"]
+                # Belirtilen fiyat varsa onu kullan, yoksa canlı fiyatı al
+                if price_str:
+                    price = float(price_str.replace(",", "."))
+                else:
+                    price_data = dc.get_current_price(symbol)
+                    price = price_data["price"] if price_data else holdings[symbol]["maliyet"]
+                
                 qty = holdings[symbol]["adet"]
                 
                 res = pm.remove_stock(symbol, qty, price, reason="Manuel Telegram Komutu")

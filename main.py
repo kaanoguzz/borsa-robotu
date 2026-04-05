@@ -152,12 +152,23 @@ class BorsaRobotu:
                     else:
                         self.add_log("💤 Uygun sinyal bulunamadı. Bekleniyor...", "dim")
                 else:
-                    self.add_log("🛡️ Hissedeyiz. Sadece İz Süren Stop kontrol ediliyor...", "cyan")
+                    self.add_log("🛡️ Hissedeyiz. Teknik SAT sinyalleri ve Portföy kontrol ediliyor...", "cyan")
+                    live.update(self.create_layout())
+                    
+                    for h in list(self.portfolio.data['hisseler'].keys()):
+                        sell_signal, sell_reason = self.scanner.check_sell_condition(h)
+                        if sell_signal:
+                            curr_price_data = self.dc.get_current_price(h)
+                            c_price = curr_price_data['price'] if curr_price_data else self.portfolio.data["hisseler"][h]["maliyet"]
+                            self.add_log(f"📉 {h} TEKNİK SAT: {sell_reason}", "bold red")
+                            basari, net, kzo, ilerleme = self.portfolio.sell(h, c_price, f"Teknik Sat: {sell_reason}")
+                            if basari:
+                                self.notifier.send_sell_signal(h, c_price, sell_reason, kzo, ilerleme)
 
                 live.update(self.create_layout())
                 
-                # 60 saniye boyunca canlı arayüzü güncel tutarak bekle
-                for _ in range(60):
+                # 300 saniye (5 dakika) boyunca canlı arayüzü güncel tutarak bekle
+                for _ in range(300):
                     time.sleep(1)
                     live.update(self.create_layout())
 

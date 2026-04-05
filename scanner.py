@@ -27,11 +27,7 @@ except AttributeError:
 
 logger = logging.getLogger(__name__)
 
-BIST100_TICKERS = [
-    "THYAO", "GARAN", "AKBNK", "ISCTR", "YKBNK", "EREGL", "SISE", 
-    "BIMAS", "ASELS", "TCELL", "TUPRS", "SAHOL", "KCHOL", "FROTO", 
-    "TOASO", "PGSUS", "KOZAL", "ARCLK"
-]
+from config import BIST100_TICKERS
 
 class Scanner:
     def __init__(self):
@@ -108,3 +104,38 @@ class Scanner:
             if sig:
                 buy_signals.append(sig)
         return buy_signals
+
+    def check_sell_condition(self, symbol):
+        """
+        Eldeki hisse için Erken Satış Sinyali üretir.
+        15 dakikalık grafikte: Fiyat EMA(5)'in altına inmişse ve RSI < 40 ise
+        veya EMA(5), EMA(20)'yi aşağı kestiyse SAT uyarısı verir.
+        """
+        try:
+            df_15m = self.get_data(symbol, "15m", "5d")
+            if df_15m is None or len(df_15m) < 20:
+                return False, ""
+                
+            df_15m.ta.rsi(length=14, append=True)
+            df_15m.ta.ema(length=5, append=True)
+            df_15m.ta.ema(length=20, append=True)
+            
+            rsi = df_15m['RSI_14'].iloc[-1]
+            ema5_curr = df_15m['EMA_5'].iloc[-1]
+            ema20_curr = df_15m['EMA_20'].iloc[-1]
+            ema5_prev = df_15m['EMA_5'].iloc[-2]
+            ema20_prev = df_15m['EMA_20'].iloc[-2]
+            current_price = df_15m['Close'].iloc[-1]
+
+            crossunder = (ema5_prev >= ema20_prev) and (ema5_curr < ema20_curr)
+            
+            if crossunder:
+                return True, f"EMA(5) Ort. Altı Kesişim (Fiyat: {current_price:.2f}, RSI: {rsi:.1f})"
+                
+            if current_price < ema5_curr and rsi < 40:
+                 return True, f"Fiyat zayıflığı ve hacim kaybı, RSI {rsi:.1f}"
+                 
+            return False, ""
+        except Exception as e:
+            logger.error(f"Sell check hatası {symbol}: {e}")
+            return False, ""

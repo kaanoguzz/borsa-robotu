@@ -198,6 +198,12 @@ def run_cloud_scan():
                         sell_reason = f"🎯 Hedef fiyata ulasti ({target} TL)"
                     elif stop > 0 and current_price <= stop:
                         sell_reason = f"🛑 Stop loss seviyesine indi ({stop} TL)"
+                    else:
+                        from scanner import Scanner
+                        sc = Scanner()
+                        tech_sell_signal, tech_sell_reason = sc.check_sell_condition(sym)
+                        if tech_sell_signal:
+                            sell_reason = f"📉 Aktif Defans Sinyali: {tech_sell_reason}"
                         
                     if sell_reason:
                         # Satış işlemi

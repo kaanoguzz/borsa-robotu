@@ -2,10 +2,10 @@ name: BIST 100 Otomatik Tarama
 
 on:
   schedule:
-    # Borsa saatlerinde her 15 dakikada bir çalış (UTC saati, TR = UTC+3)
+    # Borsa saatlerinde her 5 dakikada bir çalış (UTC saati, TR = UTC+3)
     # TR 10:00 = UTC 07:00, TR 18:00 = UTC 15:00
-    # Hafta içi her 15 dakikada bir
-    - cron: '*/15 7-15 * * 1-5'
+    # Hafta içi her 5 dakikada bir
+    - cron: '*/5 7-15 * * 1-5'
 
   # Manuel tetikleme (test için)
   workflow_dispatch:

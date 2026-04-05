@@ -143,12 +143,14 @@ def normalize_text(text: str) -> str:
         "abccdefgghiijklmnoöprsstuüvyz"
     )
     # Önce özel Türkçe karakter dönüşümleri
-    text = text.replace("İ", "i").replace("I", "ı").lower()
-    # Sonra standart tablo (güvenlik için)
-    # Ama aslında hedefimiz 'aldim' ile 'aldım'ı aynı kefeye koymak
-    text = text.replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c")
-    # 'elimizde ne var' gibi boşluklu kalıpları basitleştir
-    text = text.replace("elimizde ne var", "portfoy").replace("ne var", "portfoy").replace("ne durumdayiz", "portfoy")
+    # Bazı özel boşluklu kalıpları basitleştir (Noktalama işaretlerinden ÖNCE yapalım)
+    text = text.replace("elimizde ne var", "portfoy").replace("ne var", "portfoy")
+    text = text.replace("ne durumdayiz", "portfoy").replace("durum ne", "portfoy")
+    
+    # Noktalama işaretlerini kaldır
+    import string
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    
     return text.strip()
 
 # ==================== TELEGRAM KOMUT DİNLEYİCİ ====================
@@ -251,7 +253,7 @@ def process_user_commands(pm, notifier, dc):
                     # Not: cloud_scanner ana analizinden de gelebilir ama burada hızlı ATR yapalım
                     pm.add_stock(symbol, adet, price, target_price=price*1.05, stop_loss=price*0.97, notes="Manuel Telegram Komutu", previous_close=prev_close)
                     
-                    notifier.send_message(f"✅ <b>{symbol}</b> takibe alındı!\n💰 Fiyat: {price:.2f} TL\n📦 Adet: {adet:.2f}\n🛡️ Zırhlar aktif edildi.")
+                    notifier.send_message(f"✅ <b>Tamam efendim, {symbol} takibe alındı!</b>\n💰 Fiyat: {price:.2f} TL\n📦 Adet: {adet:.2f}\n🛡️ Zırhlar ve Takip Sistemi aktif edildi.")
                     logger.info(f"Telegram Komutu: {symbol} alindi.")
                 else:
                     notifier.send_message(f"⚠️ Bakiye yetersiz ({bakiye:.2f} TL). Alım yapılamadı.")
@@ -270,7 +272,7 @@ def process_user_commands(pm, notifier, dc):
                 
                 res = pm.remove_stock(symbol, qty, price, reason="Manuel Telegram Komutu")
                 if res["success"]:
-                    notifier.send_message(f"🚨 <b>{symbol}</b> portföyden çıkarıldı.\n💰 Satış Fiyatı: {price:.2f} TL\n📈 Kâr/Zarar: {res['profit_loss']:+.2f} TL\n🏁 Hedef takibi güncellendi.")
+                    notifier.send_message(f"🚨 <b>Tamamdır efendim, {symbol} satıldı.</b>\n💰 Satış Fiyatı: {price:.2f} TL\n📈 Kâr/Zarar: {res['profit_loss']:+.2f} TL\n🏁 Hedef takibi ve ilerleme çubuğu güncellendi.")
                     logger.info(f"Telegram Komutu: {symbol} satildi.")
             else:
                 notifier.send_message(f"❌ {symbol} portföyünüzde bulunamadı.")

@@ -130,6 +130,19 @@ class BorsaRobotu:
             except Exception:
                 pass
                 
+        # PERİYODİK BULUT SENKRONİZASYONU (Sadece her 10 döngüde bir)
+        if hasattr(self, 'sync_counter'):
+            self.sync_counter += 1
+        else:
+            self.sync_counter = 0
+
+        if self.sync_counter % 10 == 0:
+            try:
+                import subprocess
+                subprocess.run(["git", "pull", "origin", "main"], capture_output=True, timeout=5)
+            except:
+                pass
+                
         toplam_varlik = bakiye + aktif_deger
         ilerleme = (toplam_varlik / self.portfolio.target) * 100
         

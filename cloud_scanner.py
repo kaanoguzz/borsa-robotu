@@ -147,6 +147,8 @@ def normalize_text(text: str) -> str:
     # Sonra standart tablo (güvenlik için)
     # Ama aslında hedefimiz 'aldim' ile 'aldım'ı aynı kefeye koymak
     text = text.replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c")
+    # 'elimizde ne var' gibi boşluklu kalıpları basitleştir
+    text = text.replace("elimizde ne var", "portfoy").replace("ne var", "portfoy").replace("ne durumdayiz", "portfoy")
     return text.strip()
 
 # ==================== TELEGRAM KOMUT DİNLEYİCİ ====================

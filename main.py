@@ -139,15 +139,34 @@ class BorsaRobotu:
         else:
             hedef_text += f"\n💼 Portföy: NAKİT ({bakiye:,.2f} TL)"
 
-        grid.add_row(Panel(hedef_text, title="HEDEF TAKİBİ", border_style="cyan"))
-
-        # Log Tablosu
-        log_table = Table(show_header=False, expand=True, border_style="dim")
-        log_table.add_column()
-        for log in self.logs:
-            log_table.add_row(log)
-        
         grid.add_row(Panel(log_table, title="CANLI İŞLEM GÜNLÜĞÜ", border_style="yellow"))
+
+        # İşlem Geçmişi Paneli (Yeni!)
+        history = self.portfolio.get_transactions(limit=6)
+        if history:
+            hist_table = Table(show_header=True, expand=True, border_style="dim", header_style="bold magenta")
+            hist_table.add_column("Tarih", style="dim")
+            hist_table.add_column("Sembol", style="bold cyan")
+            hist_table.add_column("İşlem", justify="center")
+            hist_table.add_column("Fiyat", justify="right")
+            hist_table.add_column("K/Z", justify="right")
+
+            for h in history:
+                kz_val = h.get("profit_loss", 0)
+                kz_str = f"{kz_val:+.2f} TL"
+                kz_style = "green" if kz_val > 0 else "red" if kz_val < 0 else "white"
+                
+                # Tarih formatla (YYYY-MM-DD HH:MM:SS -> HH:MM)
+                tarih_str = h["date"].split(" ")[-1][:5] if " " in h["date"] else h["date"][:5]
+                
+                hist_table.add_row(
+                    tarih_str,
+                    h["symbol"],
+                    "[green]AL[/green]" if h["action"] == "AL" else "[red]SAT[/red]",
+                    f"{h['price']:.2f}",
+                    f"[{kz_style}]{kz_str}[/{kz_style}]" if h["action"] == "SAT" else "-"
+                )
+            grid.add_row(Panel(hist_table, title="SON İŞLEM GEÇMİŞİ", border_style="magenta"))
 
         return grid
 

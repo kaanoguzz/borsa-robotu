@@ -285,6 +285,21 @@ def run_cloud_scan():
     now_tr = datetime.now(TZ_TR)
     logger.info(f"Tarama baslatiliyor: {now_tr.strftime('%d.%m.%Y %H:%M')} (TR)")
 
+    # ==================== KULLANICI KOMUTLARI ====================
+    try:
+        from portfolio import PortfolioManager
+        from notifier import Notifier
+        from data_collector import DataCollector
+        
+        pm = PortfolioManager()
+        notifier = Notifier()
+        dc = DataCollector()
+        
+        process_user_commands(pm, notifier, dc)
+    except Exception as e:
+        logger.error(f"Kullanici komutu isleme hatasi: {e}")
+
+    # ==================== PAZAR SAATİ KONTROLÜ ====================
     if not is_market_hours():
         logger.info("Borsa kapali - tarama atlaniyor")
         return
@@ -297,24 +312,13 @@ def run_cloud_scan():
 
     try:
         from signal_generator import SignalGenerator
-        from data_collector import DataCollector
         from config import BIST100_TICKERS
-        from portfolio import PortfolioManager
         import yfinance as yf
     except ImportError as e:
         logger.error(f"Modul import hatasi: {e}")
         sys.exit(1)
 
     sg = SignalGenerator()
-    dc = DataCollector()
-    pm = PortfolioManager()
-    notifier = Notifier()
-
-    # ==================== KULLANICI KOMUTLARI ====================
-    try:
-        process_user_commands(pm, notifier, dc)
-    except Exception as e:
-        logger.error(f"Kullanici komutu isleme hatasi: {e}")
 
     # ==================== OTO-SAT KONTROLÜ ====================
     holdings = pm.get_portfolio()

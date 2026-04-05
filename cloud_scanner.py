@@ -135,6 +135,105 @@ def calculate_targets(symbol: str, result: dict) -> dict:
     }
 
 
+# ==================== TELEGRAM KOMUT DİNLEYİCİ ====================
+def process_user_commands(pm, notifier, dc):
+    """Telegram'dan gelen kullanıcı komutlarını (Hisse aldım/sattım) işler"""
+    offset_file = "telegram_offset.txt"
+    offset = 0
+    if os.path.exists(offset_file):
+        try:
+            with open(offset_file, "r") as f:
+                offset = int(f.read().strip())
+        except:
+            offset = 0
+
+    updates = notifier.get_updates(offset=offset + 1)
+    if not updates:
+        return
+
+    import re
+    # Örnek: "THYAO aldim" veya "ASELS 31.50 aldim"
+    # Grup 1: Sembol, Grup 2: Fiyat (Opsiyonel), Grup 3: Eylem
+    buy_pattern = re.compile(r"([A-Z0-9]+)\s*(\d+[\.,]\d+)?\s*(aldim|aldım|al)$", re.IGNORECASE)
+    sell_pattern = re.compile(r"([A-Z0-9]+)\s*(sattim|sattım|sat)$", re.IGNORECASE)
+
+    max_id = offset
+    for update in updates:
+        max_id = max(max_id, update.get("update_id", 0))
+        message = update.get("message", {})
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        text = message.get("text", "").strip()
+
+        # Sadece yetkili CHAT_ID'den gelen mesajları işle
+        if chat_id != str(os.getenv("TELEGRAM_CHAT_ID")):
+            continue
+
+        if not text:
+            continue
+
+        # ALIM KOMUTU
+        buy_match = buy_pattern.match(text)
+        if buy_match:
+            symbol = buy_match.group(1).upper()
+            price_str = buy_match.group(2)
+            
+            # Canlı fiyatı al (fiyat belirtilmediyse)
+            if price_str:
+                price = float(price_str.replace(",", "."))
+            else:
+                price_data = dc.get_current_price(symbol)
+                price = price_data["price"] if price_data else 0
+
+            if price > 0:
+                # Önceki kapanış bilgisini de (Tavan kilidi için) çekmeye çalış
+                prev_close = 0
+                try:
+                    import yfinance as yf
+                    ticker = yf.Ticker(f"{symbol}.IS")
+                    prev_close = ticker.info.get("previousClose", 0)
+                except:
+                    pass
+
+                # Bakiyeyi kontrol et ve adet hesapla
+                bakiye = pm.get_balance()
+                if bakiye > 10: # Minimum işlem tutarı
+                    komisyon = bakiye * 0.002
+                    net_bakiye = bakiye - komisyon
+                    adet = net_bakiye / price
+                    
+                    # Hedef ve stopları otomatik hesapla (ATR bazlı)
+                    # Not: cloud_scanner ana analizinden de gelebilir ama burada hızlı ATR yapalım
+                    pm.add_stock(symbol, adet, price, target_price=price*1.05, stop_loss=price*0.97, notes="Manuel Telegram Komutu", previous_close=prev_close)
+                    
+                    notifier.send_message(f"✅ <b>{symbol}</b> takibe alındı!\n💰 Fiyat: {price:.2f} TL\n📦 Adet: {adet:.2f}\n🛡️ Zırhlar aktif edildi.")
+                    logger.info(f"Telegram Komutu: {symbol} alindi.")
+                else:
+                    notifier.send_message(f"⚠️ Bakiye yetersiz ({bakiye:.2f} TL). Alım yapılamadı.")
+
+        # SATIM KOMUTU
+        sell_match = sell_pattern.match(text)
+        if sell_match:
+            symbol = sell_match.group(1).upper()
+            
+            # Portföyde var mı?
+            holdings = pm.get_holdings_dict()
+            if symbol in holdings:
+                price_data = dc.get_current_price(symbol)
+                price = price_data["price"] if price_data else holdings[symbol]["maliyet"]
+                qty = holdings[symbol]["adet"]
+                
+                res = pm.remove_stock(symbol, qty, price, reason="Manuel Telegram Komutu")
+                if res["success"]:
+                    notifier.send_message(f"🚨 <b>{symbol}</b> portföyden çıkarıldı.\n💰 Satış Fiyatı: {price:.2f} TL\n📈 Kâr/Zarar: {res['profit_loss']:+.2f} TL\n🏁 Hedef takibi güncellendi.")
+                    logger.info(f"Telegram Komutu: {symbol} satildi.")
+            else:
+                notifier.send_message(f"❌ {symbol} portföyünüzde bulunamadı.")
+
+    # Yeni offseti kaydet
+    with open(offset_file, "w") as f:
+        f.write(str(max_id))
+
+
 # ==================== ANA TARAMA ====================
 def run_cloud_scan():
     now_tr = datetime.now(TZ_TR)
@@ -163,6 +262,13 @@ def run_cloud_scan():
     sg = SignalGenerator()
     dc = DataCollector()
     pm = PortfolioManager()
+    notifier = Notifier()
+
+    # ==================== KULLANICI KOMUTLARI ====================
+    try:
+        process_user_commands(pm, notifier, dc)
+    except Exception as e:
+        logger.error(f"Kullanici komutu isleme hatasi: {e}")
 
     # ==================== OTO-SAT KONTROLÜ ====================
     holdings = pm.get_portfolio()

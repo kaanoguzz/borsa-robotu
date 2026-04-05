@@ -86,6 +86,20 @@ class PortfolioManager:
             )
         """)
 
+        # Bakiye tablosu
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS balance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                amount REAL DEFAULT 200.0,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Eğer bakiye hiç yoksa başlangıç bakiyesini ekle
+        cursor.execute("SELECT COUNT(*) FROM balance")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("INSERT INTO balance (amount) VALUES (200.0)")
+
         conn.commit()
         conn.close()
         logger.info("Veritabanı hazır")
@@ -135,8 +149,14 @@ class PortfolioManager:
                 (symbol.upper(), "AL", quantity, buy_price, quantity * buy_price, notes or "Manuel / Oto ekleme")
             )
 
+            # BAKIYE GÜNCELLE
+            cursor.execute("SELECT amount FROM balance WHERE id = 1")
+            current_bal = cursor.fetchone()[0]
+            new_bal = current_bal - (quantity * buy_price)
+            cursor.execute("UPDATE balance SET amount = ? WHERE id = 1", (new_bal,))
+
             conn.commit()
-            logger.info(f"Portföye eklendi: {quantity} adet {symbol} @ {buy_price} TL")
+            logger.info(f"Portföye eklendi: {quantity} adet {symbol} @ {buy_price} TL. Yeni Bakiye: {new_bal:.2f}")
             
             return {
                 "success": True,
@@ -191,16 +211,16 @@ class PortfolioManager:
 
                 remaining -= sell_qty
 
-            # İşlem geçmişine ekle
-            cursor.execute(
-                "INSERT INTO transactions (symbol, action, quantity, price, total_value, profit_loss, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (symbol.upper(), "SAT", quantity, sell_price, quantity * sell_price, total_profit, reason or "Manuel satış")
-            )
+            # BAKIYE GÜNCELLE
+            cursor.execute("SELECT amount FROM balance WHERE id = 1")
+            current_bal = cursor.fetchone()[0]
+            new_bal = current_bal + (quantity * sell_price)
+            cursor.execute("UPDATE balance SET amount = ? WHERE id = 1", (new_bal,))
 
             conn.commit()
 
             profit_emoji = "📈" if total_profit > 0 else "📉"
-            logger.info(f"Portföyden çıkarıldı: {quantity} adet {symbol} @ {sell_price} TL (K/Z: {total_profit:.2f})")
+            logger.info(f"Portföyden çıkarıldı: {quantity} adet {symbol} @ {sell_price} TL (K/Z: {total_profit:.2f}). Yeni Bakiye: {new_bal:.2f}")
 
             return {
                 "success": True,
@@ -282,7 +302,29 @@ class PortfolioManager:
         holdings = self.get_portfolio()
         return [h["symbol"] for h in holdings]
 
-    def get_portfolio_value(self, current_prices: dict) -> dict:
+    def get_holdings_dict(self) -> dict:
+        """JSON portföy yapısıyla uyumluluk için sözlük döndürür"""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT symbol, quantity, buy_price, target_price, stop_loss, max_peak_price, previous_close FROM portfolio")
+        rows = cursor.fetchall()
+        
+        hisseler = {}
+        for row in rows:
+            hisseler[row[0]] = {
+                "adet": row[1],
+                "maliyet": row[2],
+                "hedef": row[3],
+                "stop": row[4],
+                "en_yuksek_fiyat": row[5],
+                "previous_close": row[6]
+            }
+        
+        conn.close()
+        return hisseler
+
+    def get_portfolio_summary(self, current_prices: dict = None) -> dict:
         """Portföyün güncel değerini hesaplar"""
         holdings = self.get_portfolio()
         

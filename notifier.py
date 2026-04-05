@@ -63,3 +63,16 @@ class Notifier:
 🏁 <b>HEDEF TAKİBİ:</b>
 200 TL -> 100.000 TL yolunda bakiye: <b>{guncel_bakiye:.2f} TL</b> (<b>%{ilerleme:.2f}</b> tamamlandı)"""
         return self.send_message(mesaj)
+
+    def get_updates(self, offset=None):
+        """Yeni mesajları getirir"""
+        url = f"https://api.telegram.org/bot{self.token}/getUpdates"
+        params = {"timeout": 10, "offset": offset}
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            if response.status_code == 200:
+                return response.json().get("result", [])
+            return []
+        except Exception as e:
+            logger.error(f"Telegram update hatası: {e}")
+            return []

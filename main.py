@@ -15,7 +15,7 @@ from datetime import datetime
 from scanner import Scanner
 from brain import Brain
 from notifier import Notifier
-from portfolio_manager import Portfolio
+from portfolio import PortfolioManager as Portfolio
 from data_collector import DataCollector
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -48,8 +48,9 @@ class BorsaRobotu:
         ))
         
         # Portfolio and Target
-        bakiye = self.portfolio.data['bakiye']
-        aktif_hisseler = list(self.portfolio.data['hisseler'].keys())
+        bakiye = self.portfolio.get_balance()
+        holdings = self.portfolio.get_holdings_dict()
+        aktif_hisseler = list(holdings.keys())
         
         # XU100 5 Dakikalık şelale kontrolü
         index_crash = False
@@ -61,7 +62,7 @@ class BorsaRobotu:
                     index_crash = True
         except:
             pass
-
+        
         # Canlı Fiyat Güncelleme ve Stop Kontrolü
         aktif_deger = 0
         hisse_durumlari = ""
@@ -76,9 +77,9 @@ class BorsaRobotu:
                     max_peak = peak_data["max_peak"]
                     prev_close = peak_data["previous_close"]
                     
-                    target = self.portfolio.data["hisseler"][h].get("hedef", 0)
-                    stop = self.portfolio.data["hisseler"][h].get("stop", 0)
-                    maliyet = self.portfolio.data["hisseler"][h]["maliyet"]
+                    target = holdings[h].get("hedef", 0)
+                    stop = holdings[h].get("stop", 0)
+                    maliyet = holdings[h]["maliyet"]
                     
                     # Satış Kontrolü
                     satis_durumu = False
@@ -109,8 +110,9 @@ class BorsaRobotu:
 
                     if satis_durumu:
                         self.add_log(f"🚨 {h} SATIŞ: {neden}", "bold red")
-                        basari, net, kzo, ilerleme = self.portfolio.sell(h, curr_price, neden)
-                        if basari:
+                        qty = holdings[h]["adet"]
+                        result = self.portfolio.remove_stock(h, qty, curr_price, neden)
+                        if result["success"]:
                             tahmini_dip = curr_price * 0.97
                             self.notifier.send_sell_signal(
                                 symbol=h, 
@@ -118,13 +120,13 @@ class BorsaRobotu:
                                 tahmini_dip=tahmini_dip, 
                                 bozulan_parametreler=neden,
                                 guncel_bakiye=self.portfolio.get_balance(),
-                                kar_zarar=net
+                                kar_zarar=result["profit_loss"]
                             )
                     else:
                         kz = ((curr_price - maliyet)/maliyet)*100
                         renk = "green" if kz >= 0 else "red"
                         hisse_durumlari += f"[{renk}]{h} : {curr_price:.2f} TL (%{kz:+.2f})[/{renk}] "
-                        aktif_deger += curr_price * self.portfolio.data['hisseler'][h]['adet']
+                        aktif_deger += curr_price * holdings[h]['adet']
             except Exception:
                 pass
                 
@@ -158,7 +160,8 @@ class BorsaRobotu:
                 # Ekranda canlı akışı korurken tarama işlemi
                 
                 # Sadece NAKİT'te isek tarama yapacağız
-                if len(self.portfolio.data['hisseler']) == 0:
+                holdings = self.portfolio.get_holdings_dict()
+                if len(holdings) == 0:
                     self.add_log("🔍 Piyasa taranıyor... (RSI < 45, EMA5>20, 4H EMA50 Trend Onayı)", "cyan")
                     live.update(self.create_layout())
                     
@@ -182,9 +185,14 @@ class BorsaRobotu:
                             if onay:
                                 self.add_log(f"✅ {sym} YÜKSEK GÜVEN ONAYI! (%{skor:.1f})", "bold green")
                                 
-                                # Portföye Alım
-                                success, _ = self.portfolio.buy(sym, price)
-                                if success:
+                                # Portföye Alım (SQLite methoduna göre adet hesaplama lojiği)
+                                bakiye = self.portfolio.get_balance()
+                                komisyon = bakiye * 0.002
+                                net_bakiye = bakiye - komisyon
+                                adet = net_bakiye / price
+                                
+                                result = self.portfolio.add_stock(sym, adet, price, target_price=price*1.05, stop_loss=price*0.97, notes="Otonom Alım")
+                                if result["success"]:
                                     self.add_log(f"🏦 {sym} SATIN ALINDI!", "bold green")
                                     # Bildirim Gönder
                                     self.notifier.send_buy_signal(
@@ -203,21 +211,25 @@ class BorsaRobotu:
                     self.add_log("🛡️ Hissedeyiz. Teknik SAT sinyalleri ve Portföy kontrol ediliyor...", "cyan")
                     live.update(self.create_layout())
                     
-                    for h in list(self.portfolio.data['hisseler'].keys()):
+                    holdings_list = list(holdings.keys())
+                    for h in holdings_list:
                         sell_signal, sell_reason = self.scanner.check_sell_condition(h)
                         if sell_signal:
                             curr_price_data = self.dc.get_current_price(h)
-                            c_price = curr_price_data['price'] if curr_price_data else self.portfolio.data["hisseler"][h]["maliyet"]
+                            c_price = curr_price_data['price'] if curr_price_data else holdings[h]["maliyet"]
                             self.add_log(f"📉 {h} TEKNİK SAT: {sell_reason}", "bold red")
-                            tahmini_dip = c_price * 0.97
-                            if basari:
+                            
+                            qty = holdings[h]["adet"]
+                            result = self.portfolio.remove_stock(h, qty, c_price, sell_reason)
+                            if result["success"]:
+                                tahmini_dip = c_price * 0.97
                                 self.notifier.send_sell_signal(
                                     symbol=h, 
                                     fiyat=c_price, 
                                     tahmini_dip=tahmini_dip, 
                                     bozulan_parametreler=sell_reason,
                                     guncel_bakiye=self.portfolio.get_balance(),
-                                    kar_zarar=net
+                                    kar_zarar=result["profit_loss"]
                                 )
 
                 live.update(self.create_layout())

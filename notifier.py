@@ -49,6 +49,17 @@ class Notifier:
 (Not: Bu mesaj sadece tüm parametreler onaylandığında düşer.)"""
         return self.send_message(mesaj)
 
+    def send_b_class_signal(self, symbol, current_price, target_price, stop_price, onay_notu):
+        mesaj = f"""🥈 <b>B SINIFI FIRSAT (6/6 Tam Onay)</b>
+<b>{symbol}</b> - AL (Hedef %4.5+)
+💰 <b>Anlık Fiyat:</b> {current_price:.2f} TL
+🎯 <b>Hedef Fiyat:</b> {target_price:.2f} TL
+🛑 <b>Zarar Kes:</b> {stop_price:.2f} TL
+
+{onay_notu}
+🔍 <i>Not: Bu hisse ana hedefin (%5.2) biraz altında ama 6/6 onaylı olduğu için kaçırılmamalıdır.</i>"""
+        return self.send_message(mesaj)
+
     def send_sell_signal(self, symbol, fiyat, tahmini_dip, bozulan_parametreler, guncel_bakiye=200, kar_zarar=0):
         ilerleme = min(100, (guncel_bakiye / 100000) * 100)
         mesaj = f"""🔴 <b>SATIŞ SİNYALİ (Düşüş Tahmini ve Bozulma Raporu)</b>
@@ -111,12 +122,31 @@ class Notifier:
     def get_updates(self, offset=None):
         """Yeni mesajları getirir"""
         url = f"https://api.telegram.org/bot{self.token}/getUpdates"
-        params = {"timeout": 10, "offset": offset}
+        # Timeout'u 3 saniyeye düşürerek daha seri cevap vermesini sağlıyoruz
+        params = {"timeout": 3, "offset": offset}
         try:
-            response = requests.get(url, params=params, timeout=15)
+            response = requests.get(url, params=params, timeout=5)
             if response.status_code == 200:
                 return response.json().get("result", [])
             return []
         except Exception as e:
-            logger.error(f"Telegram update hatası: {e}")
+            # logger.error(f"Telegram update hatası: {e}")
             return []
+
+    def send_tomorrow_forecast_report(self, buy_candidates: list):
+        """Yarın için en yüksek potansiyelli hisseleri raporlar"""
+        if not buy_candidates:
+            return self.send_message("🛡️ <b>YARIN İÇİN TAHMİN RAPORU</b>\n\nŞu anki verilerle yarın için güvenli bir 'AL' sinyali oluşmadı. Nakitte beklemek en güvenli liman görünüyor.")
+
+        msg = "🚀 <b>YARININ YÜKSELEBİLECEK HİSSELERİ</b>\n"
+        msg += f"📅 Tarih: {buy_candidates[0].get('date', datetime.now().strftime('%d.%m.%Y'))}\n\n"
+        
+        for i, s in enumerate(buy_candidates[:5]):
+            rank_emoji = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i]
+            msg += f"{rank_emoji} <b>#{s['symbol']}</b>\n"
+            msg += f"💰 Giriş: {s['price']:.2f} TL | Hedef: %{s['target_pct']:+.1f}\n"
+            msg += f"📊 Güven Skoru: %{s['score']:.0f}\n"
+            msg += f"📝 <i>{s['reason']}</i>\n\n"
+        
+        msg += "⚠️ <i>Not: Bu liste AI tahminidir. Lütfen stop-loss seviyelerine sadık kalın.</i>"
+        return self.send_message(msg)

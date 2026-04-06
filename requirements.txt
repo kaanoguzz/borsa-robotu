@@ -21,3 +21,4 @@ ntscraper>=0.3.0
 GoogleNews>=1.6.0
 certifi
 pip-system-certs
+keyboard

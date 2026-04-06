@@ -8,6 +8,9 @@ on:
   # Manuel tetikleme (test için)
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   scan:
     runs-on: ubuntu-latest
@@ -39,7 +42,6 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git pull origin main
           git add portfolio.db telegram_offset.txt || echo "Dosyalar bulunamadi"
           git commit -m "🤖 Oto-Trader: Portföy ve Telegram durumu güncellendi" || echo "Değişiklik yok"
-          git push origin HEAD:main
+          git push origin main

@@ -2,6 +2,7 @@ import time
 import os
 import sys
 import logging
+import threading
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -12,11 +13,10 @@ from rich.text import Text
 from rich.progress import Progress, BarColumn, TextColumn
 from datetime import datetime
 
-from scanner import Scanner
-from brain import Brain
 from notifier import Notifier
 from portfolio import PortfolioManager as Portfolio
 from data_collector import DataCollector
+from signal_generator import SignalGenerator
 from cloud_scanner import process_user_commands
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -28,8 +28,7 @@ console = Console()
 
 class BorsaRobotu:
     def __init__(self):
-        self.scanner = Scanner()
-        self.brain = Brain()
+        self.sg = SignalGenerator()
         self.notifier = Notifier()
         self.portfolio = Portfolio()
         self.dc = DataCollector()
@@ -153,6 +152,12 @@ class BorsaRobotu:
         else:
             hedef_text += f"\n💼 Portföy: NAKİT ({bakiye:,.2f} TL)"
 
+        # Log Tablosu Oluştur
+        log_table = Table(show_header=False, expand=True, box=None)
+        log_table.add_column()
+        for log in self.logs:
+            log_table.add_row(log)
+
         grid.add_row(Panel(log_table, title="CANLI İŞLEM GÜNLÜĞÜ", border_style="yellow"))
 
         # İşlem Geçmişi Paneli (Yeni!)
@@ -184,10 +189,28 @@ class BorsaRobotu:
 
         return grid
 
+    def background_telegram_listener(self):
+        """Telegram komutlarını arka planda sürekli dinler (Bloklamaz!)"""
+        while True:
+            try:
+                # 5 saniyede bir Telegram komutlarını kontrol et
+                process_user_commands(self.portfolio, self.notifier, self.dc)
+            except Exception as e:
+                # Hata olsa bile döngü bozulmasın
+                # self.add_log(f"⚠️ Telegram hatası: {str(e)}", "dim red")
+                pass
+            time.sleep(5)
+
     def run(self):
         console.clear()
         self.add_log("🚀 Robot başlatıldı! Hedef 100.000 TL", "bold green")
         
+        # Telegram komut dinleyicisini AYRI bir thread'de başlat
+        # Bu sayede tarama yaparken "durum" yazınca anında cevap verir
+        listener_thread = threading.Thread(target=self.background_telegram_listener, daemon=True)
+        listener_thread.start()
+        self.add_log("📡 Telegram dinleyici aktif edildi.", "cyan")
+
         with Live(self.create_layout(), refresh_per_second=2, console=console) as live:
             while True:
                 # Ekranda canlı akışı korurken tarama işlemi
@@ -195,58 +218,48 @@ class BorsaRobotu:
                 # Sadece NAKİT'te isek tarama yapacağız
                 holdings = self.portfolio.get_holdings_dict()
                 if len(holdings) == 0:
-                    self.add_log("🔍 Piyasa taranıyor... (RSI < 45, EMA5>20, 4H EMA50 Trend Onayı)", "cyan")
+                    self.add_log("🔍 BIST 100 Tam Tarama (6-Faktör) Başlatıldı...", "cyan")
                     live.update(self.create_layout())
                     
-                    buy_candidates = self.scanner.fast_scan()
+                    scan_results = self.sg.scan_market(quick_mode=False)
+                    buy_candidates = scan_results.get("buy_signals", [])
                     
                     if buy_candidates:
                         for cand in buy_candidates:
                             sym = cand['symbol']
                             price = cand['price']
-                            rsi = cand['rsi']
+                            score = cand['score']
                             
-                            self.add_log(f"💡 {sym} için TEKNİK AL bulundu! Fiyat: {price:.2f}, RSI: {rsi:.1f}", "yellow")
+                            self.add_log(f"🧠 {sym} için 6/6 ONAY ALINDI! Skor: {score:.1f}", "bold green")
                             live.update(self.create_layout())
                             
-                            # Duygu Analizi (Sıfır Maliyetli)
-                            self.add_log(f"🧠 {sym} Haber/Duygu analizi yapılıyor (Sınır: %70)...", "magenta")
-                            live.update(self.create_layout())
+                            # Portföye Alım
+                            bakiye = self.portfolio.get_balance()
+                            komisyon = bakiye * 0.002
+                            net_bakiye = bakiye - komisyon
+                            adet = net_bakiye / price
                             
-                            onay, skor, neden = self.brain.confirm_trade(sym)
-                            
-                            if onay:
-                                self.add_log(f"✅ {sym} YÜKSEK GÜVEN ONAYI! (%{skor:.1f})", "bold green")
-                                
-                                # Portföye Alım (SQLite methoduna göre adet hesaplama lojiği)
-                                bakiye = self.portfolio.get_balance()
-                                komisyon = bakiye * 0.002
-                                net_bakiye = bakiye - komisyon
-                                adet = net_bakiye / price
-                                
-                                result = self.portfolio.add_stock(sym, adet, price, target_price=price*1.05, stop_loss=price*0.97, notes="Otonom Alım")
-                                if result["success"]:
-                                    self.add_log(f"🏦 {sym} SATIN ALINDI!", "bold green")
-                                    # Bildirim Gönder
-                                    self.notifier.send_buy_signal(
-                                        symbol=sym,
-                                        current_price=price,
-                                        target_price=price * 1.05,
-                                        stop_price=price * 0.97,
-                                        onay_notu="✅ Teknik ✅ Hacim ✅ AKD ✅ Haber ✅ Makro ✅ Risk"
-                                    )
-                                    break # Bir hisse aldık, beklemeye geç!
-                            else:
-                                self.add_log(f"❌ {sym} Duygu filtresine takıldı: {neden}", "red")
+                            result = self.portfolio.add_stock(sym, adet, price, target_price=price*1.05, stop_loss=price*0.97, notes="6-Layer Otonom")
+                            if result["success"]:
+                                self.add_log(f"🏦 {sym} SATIN ALINDI!", "bold green")
+                                # Bildirim Gönder
+                                self.notifier.send_buy_signal(
+                                    symbol=sym,
+                                    current_price=price,
+                                    target_price=price * 1.05,
+                                    stop_price=price * 0.97,
+                                    onay_notu=cand.get("reason", "✅ 6/6 Onay")
+                                )
+                                break
                     else:
-                        self.add_log("💤 Uygun sinyal bulunamadı. Bekleniyor...", "dim")
+                        self.add_log(f"💤 Uygun sinyal bulunamadı ({scan_results.get('total_scanned', 0)} hisse taranıyor).", "dim")
                 else:
                     self.add_log("🛡️ Hissedeyiz. Teknik SAT sinyalleri ve Portföy kontrol ediliyor...", "cyan")
                     live.update(self.create_layout())
                     
                     holdings_list = list(holdings.keys())
                     for h in holdings_list:
-                        sell_signal, sell_reason = self.scanner.check_sell_condition(h)
+                        sell_signal, sell_reason = self.sg.scanner.check_sell_condition(h)
                         if sell_signal:
                             curr_price_data = self.dc.get_current_price(h)
                             c_price = curr_price_data['price'] if curr_price_data else holdings[h]["maliyet"]
@@ -267,15 +280,9 @@ class BorsaRobotu:
 
                 live.update(self.create_layout())
                 
-                # 300 saniye (5 dakika) boyunca canlı arayüzü güncel tutarak bekle
-                # 300 saniye boyunca her 5 saniyede bir Telegram komutlarını kontrol et
-                for i in range(300):
+                # 120 saniye (2 dakika) boyunca canlı arayüzü güncel tutarak bekle
+                for i in range(120):
                     time.sleep(1)
-                    if i % 5 == 0: # 5 saniyede bir bak
-                        try:
-                            process_user_commands(self.portfolio, self.notifier, self.dc)
-                        except:
-                            pass
                     live.update(self.create_layout())
 
 if __name__ == "__main__":

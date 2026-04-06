@@ -6,6 +6,7 @@ import certifi
 import os
 import shutil
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==================== SSL FIX ====================
 _original_cert = certifi.where()
@@ -31,7 +32,7 @@ from config import BIST100_TICKERS
 
 class Scanner:
     def __init__(self):
-        pass
+        self.executor = ThreadPoolExecutor(max_workers=10) # 10 hisseyi aynı anda tara
 
     def get_data(self, symbol, interval, period):
         ticker = f"{symbol}.IS"
@@ -98,9 +99,12 @@ class Scanner:
             return None
 
     def fast_scan(self):
+        """100 hisseyi paralel olarak tarar (Teknik Bazlı)"""
         buy_signals = []
-        for symbol in BIST100_TICKERS:
-            sig = self.scan_symbol(symbol)
+        futures = {self.executor.submit(self.scan_symbol, symbol): symbol for symbol in BIST100_TICKERS}
+        
+        for future in as_completed(futures):
+            sig = future.result()
             if sig:
                 buy_signals.append(sig)
         return buy_signals

@@ -15,6 +15,7 @@ Kapılar:
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from data_collector import DataCollector
 from technical_analysis import TechnicalAnalyzer
@@ -40,6 +41,7 @@ class SignalGenerator:
         self.backtester = Backtester()
         self.macro_analyzer = MacroAnalyzer()
         self.social_sentiment = SocialSentimentAnalyzer()
+        self.executor = ThreadPoolExecutor(max_workers=8) # 8 hisseyi aynı anda derin tara
 
         # Analiz ağırlıkları
         self.weights = {
@@ -263,7 +265,16 @@ class SignalGenerator:
         veto_haber = result["checklist"].get("news_clean", True)
         veto_teknik = technical_score >= 60
 
+        # VETO ESNETME: Eğer genel skor çok yüksekse (%75+) ve teknik onaylıysa, 
+        # bir ufak parametre (sosyal veya haber) eksik olsa bile B-Sınıfı olarak geçebilir.
         veto_passed = veto_akd and veto_hacim and veto_makro and veto_duygu and veto_haber and veto_teknik
+        
+        # B-Sınıfı Onayı (🥈): 6/6 değil ama 5/6 ve skor yüksek
+        is_b_class = False
+        if not veto_passed and overall_score >= 65:
+            # Kritik olanlar (AKD, Hacim, Teknik, Makro) MUTLAKA olmalı
+            if veto_akd and veto_hacim and veto_teknik and veto_makro:
+                is_b_class = True
 
         failed_params = []
         if not veto_teknik: failed_params.append("Teknik")
@@ -281,7 +292,13 @@ class SignalGenerator:
             if balina_notu:
                 onay_notu += f"\n\n{balina_notu}"
             reason = onay_notu
-        elif overall_score <= 40 or (overall_score >= 60 and not veto_passed):
+        elif is_b_class:
+            raw_action = "AL (B-SINIFI)"
+            emoji = "🥈"
+            onay_notu = "🥈 5/6 Onay (B-Sınıfı Fırsat)\n"
+            onay_notu += "✅ Teknik ✅ Hacim ✅ AKD ✅ Makro"
+            reason = onay_notu
+        elif overall_score <= 40 or (overall_score >= 60 and not veto_passed and not is_b_class):
             raw_action = "SAT"
             emoji = "🔴"
             reason = "❌ Bozulan Parametreler: " + ", ".join(failed_params)
@@ -303,9 +320,18 @@ class SignalGenerator:
 
         # Güven skoru kontrolü
         confidence_score = result.get("backtest", {}).get("confidence_score", 0)
-        notification_allowed = confidence_score >= self.min_confidence_score and veto_passed
+        
+        # KRİTİK DÜZELTME: Bulut modunda backtest atlandığı için confidence_score 0 gelir.
+        # Eğer backtest atlanmışsa, overall_score üzerinden güven tazele.
+        if result.get("backtest", {}).get("skipped"):
+            effective_confidence = overall_score 
+        else:
+            effective_confidence = confidence_score
+
+        notification_allowed = effective_confidence >= self.min_confidence_score and (veto_passed or is_b_class)
         signal["notification_allowed"] = notification_allowed
-        signal["confidence_score"] = confidence_score
+        signal["confidence_score"] = effective_confidence
+        signal["is_b_class"] = is_b_class
         
         if not notification_allowed and not result.get("backtest", {}).get("skipped"):
             signal["notification_blocked_reason"] = f"VETO'ya takıldı veya Güven Skoru yetersiz."
@@ -400,9 +426,12 @@ class SignalGenerator:
         sell_signals = []
         blocked_signals = []
 
-        for symbol in symbols:
+        futures = {self.executor.submit(self.analyze_stock, symbol, skip_backtest=quick_mode, quick_mode=quick_mode): symbol for symbol in symbols}
+        
+        for future in as_completed(futures):
+            symbol = futures[future]
             try:
-                analysis = self.analyze_stock(symbol, skip_backtest=quick_mode, quick_mode=quick_mode)
+                analysis = future.result()
                 action = analysis.get("signal", {}).get("action", "TUT")
                 score = analysis.get("overall_score", 50)
 

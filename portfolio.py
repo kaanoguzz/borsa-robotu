@@ -19,6 +19,7 @@ class PortfolioManager:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         self._init_db()
+        self.target = 100000
 
     def _init_db(self):
         """Veritabanı tablolarını oluşturur"""

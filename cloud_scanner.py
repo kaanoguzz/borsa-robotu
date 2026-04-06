@@ -8,11 +8,29 @@ AL sinyali bulursa Telegram'dan bildirim gönderir.
 GitHub Actions üzerinde her 15 dk'da bir otomatik çalışır.
 """
 
-import os
-import sys
-import logging
 import requests
+import ssl
+import shutil
 from datetime import datetime, timezone, timedelta
+
+# ===== SSL Sertifika Fix (Windows Türkçe Kullanıcı Adı & GitHub Actions) =====
+try:
+    import certifi
+    _original_cert = certifi.where()
+    _safe_cert = os.path.join(os.environ.get('TEMP', '.'), 'cacert.pem')
+    shutil.copy2(_original_cert, _safe_cert)
+    os.environ['CURL_CA_BUNDLE'] = _safe_cert
+    os.environ['SSL_CERT_FILE'] = _safe_cert
+    os.environ['REQUESTS_CA_BUNDLE'] = _safe_cert
+    certifi.where = lambda: _safe_cert
+except Exception:
+    pass
+
+try:
+    ssl._create_default_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+# ============================================================================
 
 TZ_TR = timezone(timedelta(hours=3))
 
@@ -138,17 +156,20 @@ def calculate_targets(symbol: str, result: dict) -> dict:
 # ==================== TELEGRAM KOMUT DİNLEYİCİ ====================
 def normalize_text(text: str) -> str:
     """Türkçe karakterleri normalize eder ve küçük harfe çevirir"""
-    # Önce küçük harf ve Türkçe karakter dönüşümleri (BU ÇOK ÖNEMLİ!)
+    if not text: return ""
+    
+    # Adım 1: Küçük harf ve Türkçe karakter dönüşümleri
     text = text.replace("İ", "i").replace("I", "ı").lower()
     text = text.replace("ı", "i").replace("ğ", "g").replace("ü", "u").replace("ş", "s").replace("ö", "o").replace("ç", "c")
     
-    # Bazı özel boşluklu kalıpları basitleştir (Noktalama işaretlerinden ÖNCE yapalım)
-    text = text.replace("elimizde ne var", "portfoy").replace("ne var", "portfoy")
-    text = text.replace("ne durumdayiz", "portfoy").replace("durum ne", "portfoy")
-    
-    # Noktalama işaretlerini kaldır
+    # Adım 2: Noktalama işaretlerini kaldır (Soru işareti vb. komutu bozmasın)
     import string
     text = text.translate(str.maketrans('', '', string.punctuation))
+    
+    # Adım 3: Bazı özel boşluklu kalıpları basitleştir
+    text = text.replace("elimizde ne var", "portfoy").replace("ne var", "portfoy")
+    text = text.replace("ne durumdayiz", "portfoy").replace("durum ne", "portfoy")
+    text = text.replace("durum nedir", "portfoy").replace("durum", "portfoy")
     
     return text.strip()
 
@@ -177,6 +198,7 @@ def process_user_commands(pm, notifier, dc):
     analyze_pattern = re.compile(r"([a-z0-9]+)\s*(ne durumda|analiz|durum|yorumu?|durum nedir)$")
     market_pattern = re.compile(r"^(endeks|xu100|piyasa|borsa|durum ne)$")
     bakiye_pattern = re.compile(r"(bakiyemiz|bakiye|kasa)\s*(\d+[\.,]\d+|\d+)\s*(tl|₺)?$")
+    forecast_pattern = re.compile(r"^(yarin|tahmin|gelecek|yarin ne olur)$")
 
     max_id = offset
     for update in updates:
@@ -199,6 +221,7 @@ def process_user_commands(pm, notifier, dc):
         if text in ["yardim", "help", "/start", "merhaba", "selam", "komutlar"]:
             help_msg = "🤖 <b>BORSA ROBOTU - YETENEK LİSTESİ</b>\n\n" \
                        "📊 <b>ANALİZ & SORGULAMA</b>\n" \
+                       "• <code>yarin</code> -> Yarın yükselebilecek 5 hisseyi tahmin eder\n" \
                        "• <code>[HISSE] ne durumda?</code> -> Anlık teknik/duygu analizi\n" \
                        "• <code>endeks</code> -> Borsa genel yönü ve Şelale Riski\n" \
                        "• <code>durum</code> -> Portföy detayı ve ilerleme çubuğu\n\n" \
@@ -213,8 +236,16 @@ def process_user_commands(pm, notifier, dc):
             notifier.send_message(help_msg)
             continue
 
+        # YARIN TAHMİNİ (ÖZEL KOMUT)
+        if forecast_pattern.match(text):
+            notifier.send_message("🔮 <b>Yarın için derin analiz başlatıldı...</b>\nBIST 100 hisseleri 4 katmanlı AI filtresinden geçiriliyor. Bu işlem yaklaşık 5 dakika sürebilir efendim.")
+            # Arka planda değil, direkt çalıştırıyoruz çünkü bu cloud_scanner zaten bir döngüde değil, script olarak çağrılıyor.
+            # Ama timeout olmaması için dikkatli olmalıyız.
+            send_tomorrow_forecast(pm, notifier, dc)
+            continue
+
         # PORTFÖY DURUMU (GELİŞMİŞ)
-        if text in ["portfoy", "durum", "bakiye"]:
+        if text in ["portfoy", "durum", "bakiye", "kasa"]:
             bakiye = pm.get_balance()
             holdings = pm.get_holdings_dict()
             msg = f"💰 <b>Kasa:</b> {bakiye:.2f} TL\n"
@@ -235,7 +266,8 @@ def process_user_commands(pm, notifier, dc):
                 msg += "💼 Portföy şu an boş (Nakitte)."
             
             # İlerleme Barı
-            toplam_varlik = bakiye + sum(d["adet"] * dc.get_current_price(s).get("price", d["maliyet"]) for s, d in holdings.items())
+            toplam_hisse_degeri = sum(d["adet"] * dc.get_current_price(s).get("price", d["maliyet"]) for s, d in holdings.items())
+            toplam_varlik = bakiye + toplam_hisse_degeri
             ilerleme = (toplam_varlik / 100000) * 100
             msg += f"\n🏁 <b>İlerleme:</b> %{ilerleme:.2f} / 100.000 TL"
             notifier.send_message(msg)
@@ -370,6 +402,52 @@ def process_user_commands(pm, notifier, dc):
         f.write(str(max_id))
 
 
+def send_tomorrow_forecast(pm, notifier, dc):
+    """Yarın için en iyi 5 hisseyi bulur ve gönderir"""
+    try:
+        from signal_generator import SignalGenerator
+        from config import BIST100_TICKERS
+        sg = SignalGenerator()
+        
+        buy_candidates = []
+        logger.info("Yarin tahmini taramasi basladi...")
+        
+        # Filtreyi biraz esneterek en iyi 5'i bulmayı garantileyelim
+        # Ama yine de belli bir kalite standardı olsun (Skor > 55)
+        for i, symbol in enumerate(BIST100_TICKERS):
+            try:
+                # Deep scan (quick_mode=False)
+                result = sg.analyze_stock(symbol, skip_backtest=True, quick_mode=False)
+                if not result: continue
+                
+                score = result.get("overall_score", 0)
+                price = result.get("current_price", 0)
+                
+                if score >= 55:
+                    targets = calculate_targets(symbol, result)
+                    buy_candidates.append({
+                        "symbol": symbol,
+                        "score": score,
+                        "price": price,
+                        "target_pct": targets["target_pct"],
+                        "reason": result.get("signal", {}).get("reason", "Güçlü teknik görünüm."),
+                        "date": datetime.now(TZ_TR).strftime("%d.%m.%Y")
+                    })
+                
+                if (i+1) % 20 == 0:
+                    logger.info(f"Yarin taramasi: {i+1}/100...")
+            except:
+                continue
+        
+        # En iyi 5'i seç
+        buy_candidates.sort(key=lambda x: x["score"], reverse=True)
+        notifier.send_tomorrow_forecast_report(buy_candidates[:5])
+        
+    except Exception as e:
+        logger.error(f"Forecast hatasi: {e}")
+        notifier.send_message("❌ Tahmin raporu oluşturulurken bir hata oluştu.")
+
+
 # ==================== ANA TARAMA ====================
 def run_cloud_scan():
     now_tr = datetime.now(TZ_TR)
@@ -391,7 +469,7 @@ def run_cloud_scan():
 
     # ==================== PAZAR SAATİ KONTROLÜ ====================
     if not is_market_hours():
-        logger.info("Borsa kapali - tarama atlaniyor")
+        logger.info("Borsa kapali - tarama ve sinyal kontrolü atlaniyor.")
         return
 
     try:
@@ -429,7 +507,7 @@ def run_cloud_scan():
         logger.error(f"XU100 veri hatasi: {e}")
     
     if holdings:
-        logger.info(f"Oto-Sat kontrolu yapiliyor ({len(holdings)} hisse)...")
+        logger.info(f"Sinyal kontrolu yapiliyor ({len(holdings)} hisse)...")
         symbols_to_check = [h["symbol"] for h in holdings]
         if symbols_to_check:
             try:
@@ -438,65 +516,57 @@ def run_cloud_scan():
                 
                 for h in holdings:
                     sym = h["symbol"]
-                    qty = h["quantity"]
                     
-                    if qty <= 0:
-                        continue
-                        
                     # Yfinance multiple vs single ticker yapısal farkını düzelt
                     if len(symbols_to_check) == 1:
                         current_price = data["Close"].iloc[-1]
                     else:
                         current_price = data[sym]["Close"].iloc[-1]
-                    # Zirve Değer Takibi ve Önceki Kapanış
+                    
+                    # Zirve Değer Takibi (Manuel alımlar için raporlama amaçlı)
                     peak_data = pm.update_peak_price(sym, current_price)
                     max_peak = peak_data["max_peak"]
-                    prev_close = peak_data["previous_close"]
                     
                     target = h.get("target_price", 0)
                     stop = h.get("stop_loss", 0)
                     buy_price = h.get("avg_buy_price", 0)
                     
-                    sell_reason = ""
+                    sell_alert = False
+                    reason = ""
+                    
                     if index_crash:
-                        sell_reason = "🚨 Acil Çıkış: XU100 Şelale Çöküşü (-%0.5)!"
-                    elif max_peak > buy_price and current_price < max_peak * 0.985: # Trailing Stop %1.5
-                        sell_reason = f"📉 İzleyen Stop Patladı (Zirve: {max_peak:.2f}, Fiyat düştü)"
+                        sell_alert = True
+                        reason = "🚨 Acil Çıkış: XU100 Şelale Çöküşü (-%0.5)!"
+                    elif max_peak > buy_price and current_price < max_peak * 0.985:
+                        sell_alert = True
+                        reason = f"📉 İzleyen Stop Bozuldu (Zirve: {max_peak:.2f})"
                     elif stop > 0 and current_price <= stop:
-                        sell_reason = f"🛑 Stop loss seviyesine indi ({stop} TL)"
+                        sell_alert = True
+                        reason = f"🛑 Stop loss seviyesine indi ({stop} TL)"
                     elif target > 0 and current_price >= target:
                         # Tavan Kilidi Kontrolü (+%9 veya üzeri)
+                        prev_close = peak_data.get("previous_close", 0)
                         if prev_close > 0 and current_price >= prev_close * 1.09:
-                            logger.info(f"🔒 Tavan Kilidi Aktif: {sym} hedefine ulaştı ama tavana kitlendi, satılmıyor!")
-                            pass
+                            logger.info(f"🔒 Tavan Kilidi: {sym} hedefte ama satilmiyor.")
                         else:
-                            sell_reason = f"🎯 Hedef fiyata ulasti ({target} TL)"
-                    else:
-                        from scanner import Scanner
-                        sc = Scanner()
-                        tech_sell_signal, tech_sell_reason = sc.check_sell_condition(sym)
-                        if tech_sell_signal:
-                            sell_reason = f"📉 Aktif Defans Sinyali: {tech_sell_reason}"
-                        
-                    if sell_reason:
-                        # Satış işlemi
-                        result = pm.remove_stock(sym, qty, current_price, reason=sell_reason)
-                        if result["success"]:
-                            # Parayı bakiyeye ekle
-                            pm.update_balance(result["sell_value"])
-                            profit = result["profit_loss"]
-                            emoji = "📈" if profit > 0 else "📉"
-                            msg = (
-                                f"🤖 <b>OTO-SAT GERÇEKLEŞTİ</b>\n\n"
-                                f"📦 #{sym} — {qty} adet satildi.\n"
-                                f"💰 Fiyat: {current_price:.2f} TL\n"
-                                f"📝 Neden: {sell_reason}\n"
-                                f"{emoji} Kâr/Zarar: {profit:+.2f} TL"
-                            )
-                            auto_sell_messages.append(msg)
-                            logger.info(f"OTO-SAT: {sym} satildi. Neden: {sell_reason}")
+                            sell_alert = True
+                            reason = f"🎯 Hedef fiyata ulasti ({target} TL)"
+                    
+                    if sell_alert:
+                        # Satış bildirimi ve ROTASYON TAVSİYESİ
+                        tahmini_dip = current_price * 0.97
+                        rotasyon_notu = "\n🔄 <i>Portfoyden cikip taze bir 6/6 hisseye gecme zamani gelmis olabilir.</i>"
+                        notifier.send_sell_signal(
+                            symbol=sym, 
+                            fiyat=current_price, 
+                            fiyat_hedef=target,
+                            tahmini_dip=tahmini_dip, 
+                            bozulan_parametreler=reason + rotasyon_notu,
+                            guncel_bakiye=pm.get_balance()
+                        )
+                        logger.info(f"SATIS BILDIRIMI: {sym}. Neden: {reason}")
             except Exception as e:
-                logger.error(f"Oto-sat kontrolunde hata: {e}")
+                logger.error(f"Sinyal kontrolunde hata: {e}")
 
     buy_signals = []
     sell_signals = []
@@ -524,9 +594,10 @@ def run_cloud_scan():
                 # Hedef fiyat hesapla
                 targets = calculate_targets(symbol, result)
 
-                # Sürtünme Kaybı (Friction) Kontrolü (%5.2 barajı)
-                if targets["target_pct"] < 5.2:
-                    logger.info(f"{symbol} HEDEF IPTAL: Beklenen kâr (%{targets['target_pct']}) sürtünme tamponu olan %5.2'yi aşmıyor. WAIT.")
+                # Sürtünme Kaybı (Friction) Kontrolü (%4.5 barajı)
+                # Not: B-Class sinyaller için 4.5 yeterli, A-Sınıfı için hala 5.2 aranıyor.
+                if targets["target_pct"] < 4.5:
+                    logger.info(f"{symbol} HEDEF IPTAL: Beklenen kâr (%{targets['target_pct']}) alt baraj olan %4.5'i aşmıyor.")
                     continue
 
                 buy_signals.append({
@@ -566,61 +637,40 @@ def run_cloud_scan():
     # ==================== SONUÇLAR ====================
     logger.info(f"Tarama bitti: {all_analyzed} analiz, {len(buy_signals)} AL, {len(sell_signals)} SAT")
 
-    # ===== AL SİNYALLERİ =====
+    # ===== AL SİNYALLERİ (KADEMELİ) =====
     if buy_signals:
         buy_signals.sort(key=lambda x: x["score"], reverse=True)
 
-        msg = f"🚀 <b>BIST 100 — {len(buy_signals)} AL SİNYALİ</b>\n"
-        msg += f"📅 {now_tr.strftime('%d.%m.%Y %H:%M')}\n"
-        msg += f"📊 {all_analyzed} hisse analiz edildi (2 yıl geçmiş + ML + Teknik)\n"
-        msg += "━━━━━━━━━━━━━━━━━━━━\n\n"
+        for s in buy_signals[:5]:
+            # Kategori Belirle
+            # A-Sınıfı: %5.2 ve üzeri kâr potansiyeli
+            # B-Sınıfı: %4.5 ile %5.2 arası kâr potansiyeli (Sadece 6/6 ise)
+            target_pct = s["target_pct"]
+            symbol = s["symbol"]
+            onay_notu = f"✅ Teknik ✅ Hacim ✅ AKD ✅ Haber ✅ Makro ✅ Risk\n📝 {s['reason']}"
 
-        for s in buy_signals[:8]:
-            msg += f"🟢 <b>ALIM SİNYALİ (6/6 Tam Onay)</b>\n"
-            msg += f"<b>{s['symbol']}</b> - AL\n"
-            msg += f"💰 <b>Anlık Fiyat:</b> {s['price']:.2f} TL\n"
-            msg += f"🎯 <b>Hedef Fiyat:</b> {s['target']:.2f} TL\n"
-            msg += f"🛑 <b>Zarar Kes:</b> {s['stop']:.2f} TL\n\n"
-            msg += f"{s['reason']}\n"
-            msg += "━━━━━━━━━━━━━━━━━━━━\n"
-
-        if len(buy_signals) > 8:
-            msg += f"... ve {len(buy_signals) - 8} hisse daha.\n\n"
-
-        msg += "⚡ <i>Bulut Tarayıcı — Bilgisayar kapalıyken çalışır</i>"
-        send_telegram(msg)
-
-        # ==================== OTO-AL İŞLEMİ ====================
-        balance = pm.get_balance()
-        if balance > 0:
-            # En iyi hisseyi seç (Skor'a göre ilk sıradaki, çünkü yukarıda sort edildi)
-            best = buy_signals[0]
-            price = best["price"]
-            
-            # Alınabilecek maksimum adet
-            qty = int(balance / price)
-            
-            if qty > 0:
-                cost = qty * price
-                # Bakiyeden düş ve portföye ekle
-                pm.update_balance(-cost)
-                pm.add_stock(best["symbol"], qty, price, 
-                             target_price=best["target"], 
-                             stop_loss=best["stop"], 
-                             notes="Otomatik Alım",
-                             previous_close=best.get("previous_close", 0))
-                
-                oto_al_msg = (
-                    f"🤖 <b>OTO-ALIM GERÇEKLEŞTİ</b>\n\n"
-                    f"📦 #{best['symbol']} — {qty} adet alindi.\n"
-                    f"💰 Fiyat: {price:.2f} TL\n"
-                    f"💵 Odenen: {cost:.2f} TL\n"
-                    f"🎯 Hedef: {best['target']:.2f} TL | 🛑 Stop: {best['stop']:.2f} TL\n"
-                    f"💼 Kalan Bakiye: {pm.get_balance():.2f} TL"
+            if target_pct >= 5.2:
+                # 🟢 A-Sınıfı Signal
+                notifier.send_buy_signal(
+                    symbol=symbol,
+                    current_price=s["price"],
+                    target_price=s["target"],
+                    stop_price=s["stop"],
+                    onay_notu=onay_notu
                 )
-                send_telegram(oto_al_msg)
+                logger.info(f"A-SINIFI SINYAL: {symbol} (%{target_pct})")
+            elif target_pct >= 4.5:
+                # 🥈 B-Sınıfı Signal
+                notifier.send_b_class_signal(
+                    symbol=symbol,
+                    current_price=s["price"],
+                    target_price=s["target"],
+                    stop_price=s["stop"],
+                    onay_notu=onay_notu
+                )
+                logger.info(f"B-SINIFI SINYAL: {symbol} (%{target_pct})")
             else:
-                logger.info(f"OTO-AL yapilamadi. Bakiye ({balance:.2f} TL), {best['symbol']} ({price:.2f} TL) almaya yetmiyor.")
+                logger.info(f"{symbol} atlandi (beklenen %{target_pct} yetersiz).")
 
     # Oto-Sat bildirimlerini gönder
     for m in auto_sell_messages:

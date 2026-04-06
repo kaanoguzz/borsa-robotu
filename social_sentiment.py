@@ -46,6 +46,7 @@ class SocialSentimentAnalyzer:
 
     def __init__(self):
         self.cache = {}
+        self.cache_ttl = 900  # 15 dakika (saniyelerle)
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -511,7 +512,14 @@ class SocialSentimentAnalyzer:
     # ==================== BİRLEŞİK SKOR ====================
 
     def get_combined_social_score(self, symbol: str, company_name: str = None) -> dict:
-        """Tüm kaynakları birleştirerek final sosyal skor üretir"""
+        """Tüm kaynakları birleştirerek final sosyal skor üretir (15 dk Cache'li)"""
+        now = time.time()
+        if symbol in self.cache:
+            cached_time, cached_data = self.cache[symbol]
+            if now - cached_time < self.cache_ttl:
+                logger.debug(f"{symbol} için sosyal sentiment cache'den okundu.")
+                return cached_data
+
         results = {}
         scores = []
         weights = []
@@ -564,7 +572,7 @@ class SocialSentimentAnalyzer:
             mood = "NEGATİF"
             combined_score = min(combined_score, 25)
 
-        return {
+        result = {
             "symbol": symbol,
             "combined_score": round(combined_score, 2),
             "mood": mood,
@@ -575,6 +583,10 @@ class SocialSentimentAnalyzer:
             "details": results,
             "analyzed_at": datetime.now().isoformat()
         }
+        
+        # Cache'e kaydet
+        self.cache[symbol] = (now, result)
+        return result
 
     # ==================== DUYGU ANALİZİ ====================
 

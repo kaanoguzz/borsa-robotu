@@ -471,6 +471,25 @@ def run_cloud_scan():
         logger.error(f"Kullanici komutu isleme hatasi: {e}")
 
     # ==================== PAZAR SAATİ KONTROLÜ ====================
+    # ==================== CLOUD HEARTBEAT (GÜVEN BİLDİRİMİ) ====================
+    # Gün içindeki ilk çalıştırmada (saat 10:00 civarı) kullanıcının telefonuna
+    # "Sistem Hazır" bildirimi gönderir.
+    if now_tr.hour == 10 and now_tr.minute < 10:
+        heartbeat_file = "cloud_heartbeat.status"
+        # Eğer bugün bildirim gönderilmemişse gönder
+        today_str = now_tr.strftime('%Y-%m-%d')
+        if not os.path.exists(heartbeat_file) or open(heartbeat_file).read().strip() != today_str:
+            send_telegram(
+                f"✅ <b>BULUT TARAYICI AKTİF</b>\n\n"
+                f"📅 Tarih: {now_tr.strftime('%d.%m.%Y')}\n"
+                f"⏰ Saat: {now_tr.strftime('%H:%M')}\n"
+                f"🤖 Durum: Sistem sorunsuz, tarama başlıyor.\n\n"
+                f"<i>İyi seanslar dilerim efendim.</i>"
+            )
+            with open(heartbeat_file, "w") as f:
+                f.write(today_str)
+            logger.info("Heartbeat bildirimi gönderildi.")
+
     if not is_market_hours():
         logger.info("Borsa kapali - tarama ve sinyal kontrolü atlaniyor.")
         return

@@ -8,6 +8,9 @@ AL sinyali bulursa Telegram'dan bildirim gönderir.
 GitHub Actions üzerinde her 15 dk'da bir otomatik çalışır.
 """
 
+import os
+import sys
+import logging
 import requests
 import ssl
 import shutil

@@ -49,13 +49,17 @@ class MacroAnalyzer:
             xu100 = yf.Ticker("XU100.IS")
             df = xu100.history(period="6mo", interval="1d")
 
-            if df.empty or len(df) < 50:
+            if df is None or df.empty or len(df) < 50:
                 logger.warning("XU100 verisi yetersiz, piyasa kontrolü atlanıyor")
                 return {
                     "bullish": True,  # Veri yoksa engelleme
-                    "reason": "XU100 verisi yetersiz — kontrol atlandı",
+                    "reason": "XU100 verisi yetersiz veya okunamadı — kontrol atlandı",
                     "trend": "BİLİNMEYEN"
                 }
+
+            # Verileri çekmeden önce sütun adlarını normalize et (MultiIndex olasılığına karşı)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
 
             sma20 = df['Close'].rolling(20).mean().iloc[-1]
             sma50 = df['Close'].rolling(50).mean().iloc[-1]

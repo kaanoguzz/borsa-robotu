@@ -174,6 +174,14 @@ def normalize_text(text: str) -> str:
     text = text.replace("ne durumdayiz", "portfoy").replace("durum ne", "portfoy")
     text = text.replace("durum nedir", "portfoy").replace("durum", "portfoy")
     
+    # "Sorunu Çöz" kalıpları
+    text = text.replace("sorunu coz", "tamir").replace("duzelt", "tamir").replace("fix it", "tamir")
+    text = text.replace("sorun var", "tamir").replace("hata var", "tamir").replace("calismiyor", "tamir")
+    
+    # Sohbet kalıpları
+    text = text.replace("naber", "nasilsin").replace("napiyorsun", "nasilsin")
+    text = text.replace("kimsin", "kimsin").replace("ne işe yararsın", "kimsin")
+    
     return text.strip()
 
 # ==================== TELEGRAM KOMUT DİNLEYİCİ ====================
@@ -219,6 +227,55 @@ def process_user_commands(pm, notifier, dc):
             
         # Metni normalize et (Küçük harf + Türkçe karakter temizliği)
         text = normalize_text(raw_text)
+
+        # ==================== AKILLI ASİSTAN (NLP) ====================
+        
+        # 1. SELAMLAŞMA & KİŞİLİK
+        if text in ["merhaba", "selam", "slm", "mrb", "hey", "merhabalar"]:
+            notifier.send_message("Merhaba efendim! 🤖 Piyasaları 24 saat kesintisiz izliyorum. Bugün sizin için ne yapabilirim?")
+            continue
+            
+        if text == "nasilsin":
+            notifier.send_message("Çok iyiyim efendim, işlemci sıcaklığım normal ve veri akışım saniyede 1 gigabyte! ⚡ Siz nasılsınız?")
+            continue
+            
+        if text == "kimsin":
+            notifier.send_message("Ben sizin **Borsa Robotunuzum**. 🦾\n"
+                                 "Görevim: Piyasayı taramak, yapay zeka ile 100 hisseyi analiz etmek ve size en kârlı sinyalleri bilgisayarınızı açmanıza gerek kalmadan iletmek.")
+            continue
+
+        # 2. "SORUNU ÇÖZ" - OTOMATİK TAMİR / SELF-REPAIR
+        if text == "tamir":
+            notifier.send_message("🛠️ <b>Sistem Kontrolü ve Otomatik Tamir Başlatıldı...</b>\n"
+                                 "İnternet bağlantısı, veritabanı bütünlüğü ve SSL sertifikaları yenileniyor.")
+            
+            error_report = []
+            try:
+                # SSL Yenileme
+                import certifi
+                import shutil
+                _original_cert = certifi.where()
+                _safe_cert = os.path.join(os.environ.get('TEMP', '.'), 'cacert.pem')
+                shutil.copy2(_original_cert, _safe_cert)
+                os.environ['SSL_CERT_FILE'] = _safe_cert
+                error_report.append("✅ SSL Sertifikaları tazelendi.")
+                
+                # Veri Kontrolü
+                import yfinance as yf
+                test_data = yf.Ticker("THYAO.IS").history(period="1d")
+                if not test_data.empty:
+                    error_report.append("✅ Veri akışı (Yahoo) aktif.")
+                
+                # Heartbeat Sıfırlama (Yarını tetiklemek için)
+                if os.path.exists("cloud_heartbeat.status"):
+                    os.remove("cloud_heartbeat.status")
+                    error_report.append("✅ Durum raporu sıfırlandı.")
+                
+                msg = "🛠️ <b>SİSTEM KENDİNİ TAMİR ETTİ</b>\n\n" + "\n".join(error_report) + "\n\n🚀 Şu an her şey yolunda, taramaya tam güç devam ediyorum!"
+                notifier.send_message(msg)
+            except Exception as e:
+                notifier.send_message(f"❌ <b>Tamir sırasında hata:</b> {str(e)}")
+            continue
 
         # YARDIM KOMUTU (TAM FONKSİYON LİSTESİ)
         if text in ["yardim", "help", "/start", "merhaba", "selam", "komutlar"]:

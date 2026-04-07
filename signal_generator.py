@@ -57,10 +57,11 @@ class SignalGenerator:
         self.min_backtest_accuracy = 50.0
         self.min_confidence_score = 50.0
 
-    def analyze_stock(self, symbol: str, skip_backtest: bool = False, quick_mode: bool = False) -> dict:
+    def analyze_stock(self, symbol: str, skip_backtest: bool = False, quick_mode: bool = False, external_df: pd.DataFrame = None) -> dict:
         """
         Bir hisseyi tüm katmanlarla analiz eder.
         quick_mode=True: Sadece teknik analiz + hızlı kontroller (sürekli döngü için)
+        external_df: Dışarıdan hazır veri beslemesi (Bulk download için)
         """
         logger.info(f"🔍 {symbol} analizi başlatılıyor...")
         result = {
@@ -128,8 +129,12 @@ class SignalGenerator:
 
         # ========== VERİ ÇEK ==========
         try:
-            df = self.data_collector.get_stock_data(symbol, period="1y")
-            if df.empty:
+            if external_df is not None:
+                df = external_df
+            else:
+                df = self.data_collector.get_stock_data(symbol, period="1y")
+
+            if df is None or df.empty:
                 result["errors"].append("Fiyat verisi bulunamadı")
                 result["overall_score"] = 50
                 result["signal"] = {"action": "TUT", "emoji": "⚠️", "confidence": "Veri yok"}

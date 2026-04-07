@@ -37,17 +37,21 @@ class MacroAnalyzer:
 
     # ==================== XU100 ENDEKS KAPISI ====================
 
-    def is_market_bullish(self) -> dict:
+    def is_market_bullish(self, external_df: pd.DataFrame = None) -> dict:
         """
         BIST 100 (XU100) endeksinin trend durumunu kontrol eder.
         Kural: SMA20 > SMA50 ve fiyat SMA20 üzerinde → Boğa piyasası
+        external_df: Dışarıdan hazır veri beslemesi
         """
         cached = self._get_cached("xu100")
         if cached:
             return cached
         try:
-            xu100 = yf.Ticker("XU100.IS")
-            df = xu100.history(period="6mo", interval="1d")
+            if external_df is not None:
+                df = external_df
+            else:
+                xu100 = yf.Ticker("XU100.IS")
+                df = xu100.history(period="6mo", interval="1d")
 
             if df is None or df.empty or len(df) < 50:
                 logger.warning("XU100 verisi yetersiz, piyasa kontrolü atlanıyor")
@@ -113,18 +117,22 @@ class MacroAnalyzer:
 
     # ==================== VIX (KORKU ENDEKSİ) ====================
 
-    def get_vix(self) -> dict:
+    def get_vix(self, external_df: pd.DataFrame = None) -> dict:
         """
         VIX (CBOE Volatility Index) - Küresel korku endeksi.
         VIX > 30: Yüksek korku → riskli ortam
         VIX < 20: Düşük korku → olumlu ortam
+        external_df: Dışarıdan hazır veri beslemesi
         """
         cached = self._get_cached("vix")
         if cached:
             return cached
         try:
-            vix = yf.Ticker("^VIX")
-            df = vix.history(period="1mo", interval="1d")
+            if external_df is not None:
+                df = external_df
+            else:
+                vix = yf.Ticker("^VIX")
+                df = vix.history(period="1mo", interval="1d")
 
             if df.empty:
                 return {"vix": None, "risk_level": "BİLİNMEYEN", "score": 50}
@@ -169,17 +177,21 @@ class MacroAnalyzer:
 
     # ==================== USD/TRY ====================
 
-    def get_usdtry(self) -> dict:
+    def get_usdtry(self, external_df: pd.DataFrame = None) -> dict:
         """
         USD/TRY kuru analizi.
         Dolar yükselişi genelde BIST için olumsuz.
+        external_df: Dışarıdan hazır veri beslemesi
         """
         cached = self._get_cached("usdtry")
         if cached:
             return cached
         try:
-            usdtry = yf.Ticker("USDTRY=X")
-            df = usdtry.history(period="3mo", interval="1d")
+            if external_df is not None:
+                df = external_df
+            else:
+                usdtry = yf.Ticker("USDTRY=X")
+                df = usdtry.history(period="3mo", interval="1d")
 
             if df.empty:
                 return {"usdtry": None, "trend": "BİLİNMEYEN", "score": 50}

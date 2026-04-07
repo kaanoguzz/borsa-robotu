@@ -571,20 +571,50 @@ def run_cloud_scan():
             except Exception as e:
                 logger.error(f"Sinyal kontrolunde hata: {e}")
 
+    # ==================== TOPLU VERİ ÇEKME (BULK DOWNLOAD) ====================
+    import yfinance as yf
+    logger.info(f"{len(BIST100_TICKERS)} hisse için toplu veri çekiliyor...")
+    
+    # 1. Hisse Verileri (BIST 100)
+    # yfinance 0.2.x bulk download
+    raw_data = yf.download(BIST100_TICKERS, period="1y", interval="1d", group_by='ticker', threads=True)
+    
+    # 2. Makro Veriler (XU100, VIX, USD/TRY)
+    macro_tickers = ["XU100.IS", "^VIX", "USDTRY=X"]
+    macro_data = yf.download(macro_tickers, period="6mo", interval="1d", group_by='ticker', threads=True)
+    
+    # MacroAnalyzer'ı tek bir instance olarak başlat ve verileri enjekte et
+    sg = SignalGenerator()
+    if not macro_data.empty:
+        try:
+            # Macro veriler MultiIndex olarak gelir, direkt ticker altından alıyoruz
+            sg.macro_analyzer.is_market_bullish(external_df=macro_data["XU100.IS"])
+            sg.macro_analyzer.get_vix(external_df=macro_data["^VIX"])
+            sg.macro_analyzer.get_usdtry(external_df=macro_data["USDTRY=X"])
+            logger.info("Makro veriler başarıyla enjekte edildi.")
+        except Exception as e:
+            logger.warning(f"Makro enjeksiyon hatası: {e}")
+
     # ==================== PARALEL TARAMA FONKSİYONU ====================
     def scan_worker(symbol):
         try:
-            # Her thread için kendi PM'ini kullanmak daha güvenli olabilir
+            # Bu hisseye ait veriyi çek
+            try:
+                symbol_df = raw_data[symbol]
+                if symbol_df is None or symbol_df.empty:
+                    return None
+            except (KeyError, ValueError):
+                return None
+
+            # Her thread için kendi modüllerini kullanmak daha güvenli
             from portfolio import PortfolioManager
             from notifier import Notifier
-            from data_collector import DataCollector
             
             pm_local = PortfolioManager()
             notifier_local = Notifier()
-            dc_local = DataCollector()
             
-            # TAM ANALİZ: quick_mode=False → ML + Sosyal + Temel analiz dahil
-            result = sg.analyze_stock(symbol, skip_backtest=True, quick_mode=False)
+            # TAM ANALİZ: external_df ile hızlı ve güvenli besleme
+            result = sg.analyze_stock(symbol, skip_backtest=True, quick_mode=False, external_df=symbol_df)
             if not result:
                 return None
 

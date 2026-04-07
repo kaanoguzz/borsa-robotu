@@ -746,4 +746,17 @@ def run_cloud_scan():
 
 
 if __name__ == "__main__":
-    run_cloud_scan()
+    try:
+        run_cloud_scan()
+    except Exception as e:
+        error_msg = f"❌ <b>SİSTEM HATASI</b>\n\n⚠️ Beklenmedik bir hata oluştu ve tarayıcı durdu.\n\n🔍 <b>Hata:</b> {str(e)[:200]}"
+        try:
+            from cloud_scanner import send_telegram  # Re-import test
+            send_telegram(error_msg)
+        except:
+            print(f"Telegram error reporting failed: {e}")
+        
+        # Log the full traceback
+        import traceback
+        logging.error(f"Kritik sistem hatası:\n{traceback.format_exc()}")
+        sys.exit(1)

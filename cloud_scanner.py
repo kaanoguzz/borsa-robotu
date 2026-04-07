@@ -571,115 +571,101 @@ def run_cloud_scan():
             except Exception as e:
                 logger.error(f"Sinyal kontrolunde hata: {e}")
 
-    buy_signals = []
-    sell_signals = []
-    all_analyzed = 0
-
-    total = len(BIST100_TICKERS)
-    logger.info(f"Toplam {total} hisse taranacak (TAM ANALİZ MODU - 2 yil gecmis)")
-
-    for i, symbol in enumerate(BIST100_TICKERS):
+    # ==================== PARALEL TARAMA FONKSİYONU ====================
+    def scan_worker(symbol):
         try:
+            # Her thread için kendi PM'ini kullanmak daha güvenli olabilir
+            from portfolio import PortfolioManager
+            from notifier import Notifier
+            from data_collector import DataCollector
+            
+            pm_local = PortfolioManager()
+            notifier_local = Notifier()
+            dc_local = DataCollector()
+            
             # TAM ANALİZ: quick_mode=False → ML + Sosyal + Temel analiz dahil
-            # skip_backtest=True → hız için (zaten bulutta veri yeterli olmayabilir)
             result = sg.analyze_stock(symbol, skip_backtest=True, quick_mode=False)
             if not result:
-                continue
+                return None
 
-            all_analyzed += 1
             signal = result.get("signal", {})
             action = signal.get("action", "TUT")
             score = result.get("overall_score", 50)
             price = result.get("current_price", 0)
             reason = signal.get("reason", "")
 
+            # ===== AL SİNYALİ KONTROLÜ (ANLIK) =====
             if "AL" in action and score >= 55:
-                # Hedef fiyat hesapla
                 targets = calculate_targets(symbol, result)
+                
+                # Baraj kontrolü (%4.5)
+                if targets["target_pct"] >= 4.5:
+                    onay_notu = f"✅ Teknik ✅ Hacim ✅ AKD ✅ Haber ✅ Makro ✅ Risk\n📝 {reason}"
+                    
+                    if targets["target_pct"] >= 5.2:
+                        # A-Class
+                        notifier_local.send_buy_signal(
+                            symbol=symbol,
+                            current_price=price,
+                            target_price=targets["target"],
+                            stop_price=targets["stop"],
+                            onay_notu=onay_notu
+                        )
+                        logger.info(f"ANLIK A-SINIFI: {symbol} (%{targets['target_pct']})")
+                    else:
+                        # B-Class
+                        notifier_local.send_b_class_signal(
+                            symbol=symbol,
+                            current_price=price,
+                            target_price=targets["target"],
+                            stop_price=targets["stop"],
+                            onay_notu=onay_notu
+                        )
+                        logger.info(f"ANLIK B-SINIFI: {symbol} (%{targets['target_pct']})")
+                    
+                    return {"type": "BUY", "symbol": symbol, "score": score}
 
-                # Sürtünme Kaybı (Friction) Kontrolü (%4.5 barajı)
-                # Not: B-Class sinyaller için 4.5 yeterli, A-Sınıfı için hala 5.2 aranıyor.
-                if targets["target_pct"] < 4.5:
-                    logger.info(f"{symbol} HEDEF IPTAL: Beklenen kâr (%{targets['target_pct']}) alt baraj olan %4.5'i aşmıyor.")
-                    continue
-
-                buy_signals.append({
-                    "symbol": symbol,
-                    "action": action,
-                    "score": score,
-                    "price": price,
-                    "reason": reason,
-                    "target": targets["target"],
-                    "target_pct": targets["target_pct"],
-                    "stop": targets["stop"],
-                    "stop_pct": targets["stop_pct"],
-                    "risk_reward": targets["risk_reward"],
-                    "technical_score": result.get("technical_score", 0),
-                    "ml_score": result.get("ml_score", 0),
-                    "news_score": result.get("news_score", 0),
-                    "social_score": result.get("social_score", 0),
-                    "macro_score": result.get("macro_score", 0),
-                    "fundamental_score": result.get("fundamental_score", 0),
-                    "previous_close": result.get("technical", {}).get("previous_close", price)
-                })
-                logger.info(f"[{i+1}/{total}] {symbol}: {action} Skor:{score:.0f} Hedef:{targets['target']:.2f}")
-
+            # ===== SAT SİNYALİ KONTROLÜ (ANLIK - Sadece çok güçlü sinyaller için) =====
             elif "SAT" in action and score <= 40:
-                sell_signals.append({
-                    "symbol": symbol, "action": action, "score": score,
-                    "price": price, "reason": reason,
-                })
-                logger.info(f"[{i+1}/{total}] {symbol}: {action} Skor:{score:.0f}")
-            else:
-                if (i + 1) % 20 == 0:
-                    logger.info(f"[{i+1}/{total}] ilerleme...")
+                # Sat sinyalleri genelde çok fazladır, o yüzden sadece en kötüleri veya 
+                # genel özeti gönderiyoruz (mevcut mantık korunabilir veya anlık yapılabilir)
+                return {"type": "SELL", "symbol": symbol, "score": score, "reason": reason, "price": price}
+
+            return {"type": "KEEP", "symbol": symbol}
 
         except Exception as e:
-            logger.error(f"{symbol} hatasi: {e}")
+            logger.error(f"{symbol} paralel tarama hatasi: {e}")
+            return None
+
+    # ThreadPool ile taramayı başlat
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    buy_count = 0
+    sell_signals = []
+    all_analyzed = 0
+    total = len(BIST100_TICKERS)
+    
+    logger.info(f"Toplam {total} hisse paralel taranacak (Ayni anda 6 hisse)...")
+    
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(scan_worker, sym): sym for sym in BIST100_TICKERS}
+        
+        for i, future in enumerate(as_completed(futures)):
+            res = future.result()
+            if res:
+                all_analyzed += 1
+                if res["type"] == "BUY":
+                    buy_count += 1
+                elif res["type"] == "SELL":
+                    sell_signals.append(res)
+            
+            if (i + 1) % 10 == 0:
+                logger.info(f"İlerleme: [{i+1}/{total}] tamamlandi...")
 
     # ==================== SONUÇLAR ====================
-    logger.info(f"Tarama bitti: {all_analyzed} analiz, {len(buy_signals)} AL, {len(sell_signals)} SAT")
+    logger.info(f"Tarama bitti: {all_analyzed} analiz, {buy_count} AL sinyali gonderildi.")
 
-    # ===== AL SİNYALLERİ (KADEMELİ) =====
-    if buy_signals:
-        buy_signals.sort(key=lambda x: x["score"], reverse=True)
-
-        for s in buy_signals[:5]:
-            # Kategori Belirle
-            # A-Sınıfı: %5.2 ve üzeri kâr potansiyeli
-            # B-Sınıfı: %4.5 ile %5.2 arası kâr potansiyeli (Sadece 6/6 ise)
-            target_pct = s["target_pct"]
-            symbol = s["symbol"]
-            onay_notu = f"✅ Teknik ✅ Hacim ✅ AKD ✅ Haber ✅ Makro ✅ Risk\n📝 {s['reason']}"
-
-            if target_pct >= 5.2:
-                # 🟢 A-Sınıfı Signal
-                notifier.send_buy_signal(
-                    symbol=symbol,
-                    current_price=s["price"],
-                    target_price=s["target"],
-                    stop_price=s["stop"],
-                    onay_notu=onay_notu
-                )
-                logger.info(f"A-SINIFI SINYAL: {symbol} (%{target_pct})")
-            elif target_pct >= 4.5:
-                # 🥈 B-Sınıfı Signal
-                notifier.send_b_class_signal(
-                    symbol=symbol,
-                    current_price=s["price"],
-                    target_price=s["target"],
-                    stop_price=s["stop"],
-                    onay_notu=onay_notu
-                )
-                logger.info(f"B-SINIFI SINYAL: {symbol} (%{target_pct})")
-            else:
-                logger.info(f"{symbol} atlandi (beklenen %{target_pct} yetersiz).")
-
-    # Oto-Sat bildirimlerini gönder
-    for m in auto_sell_messages:
-        send_telegram(m)
-
-    # ===== SAT SİNYALLERİ =====
+    # ===== SAT SİNYALLERİ ÖZETİ (Grup halinde gönderim) =====
     if sell_signals:
         sell_signals.sort(key=lambda x: x["score"])
         msg = f"🔴 <b>BIST 100 — {len(sell_signals)} SAT SİNYALİ</b>\n"
@@ -689,8 +675,15 @@ def run_cloud_scan():
             msg += f"   📝 {s['reason'][:55]}\n\n"
         send_telegram(msg)
 
+    # Oto-Sat bildirimlerini gönder
+    for m in auto_sell_messages:
+        send_telegram(m)
+
+    # ===== SAT SİNYALLERİ =====
+    # (Özet zaten yukarıda gönderildi)
+
     # ===== GÜNLÜK RAPOR (saat 10:00) =====
-    if not buy_signals and not sell_signals:
+    if buy_count == 0 and not sell_signals:
         if now_tr.hour == 10 and now_tr.minute < 20:
             send_telegram(
                 f"🛡️ <b>NAKİTTE KAL</b>\n\n"

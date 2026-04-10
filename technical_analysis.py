@@ -15,22 +15,31 @@ class TechnicalAnalyzer:
     """Teknik analiz indikatörlerini hesaplar ve yorumlar"""
 
     def __init__(self):
-        self.indicator_weights = {
-            "rsi": 10,
-            "macd": 12,
-            "bollinger": 8,
-            "sma_cross": 10,
-            "ema_cross": 10,
-            "stochastic": 7,
-            "adx": 8,
+        # Öncü (Leading) Göstergeler - Trend değişimini erken haber verir
+        self.leading_weights = {
+            "rsi": 15,
+            "rsi_divergence": 20, # En güçlü öncü
+            "stochastic": 10,
             "williams_r": 5,
             "cci": 5,
-            "obv_trend": 7,
-            "vwap": 5,
-            "atr": 3,
+            "obv_trend": 10,
+            "squeeze": 15, # Sıkışma kırılımı
+            "volume_spike": 20 # Hacim patlaması
+        }
+        
+        # Artçı (Lagging) Göstergeler - Trendi onaylar
+        self.lagging_weights = {
+            "macd": 15,
+            "sma_cross": 10,
+            "ema_cross": 10,
+            "adx": 10,
             "ichimoku": 5,
             "parabolic_sar": 5,
+            "vwap": 5
         }
+
+        # Toplam ağırlık sözlüğü (Geriye uyumluluk için)
+        self.indicator_weights = {**self.leading_weights, **self.lagging_weights}
 
     def calculate_all_indicators(self, df: pd.DataFrame) -> dict:
         """Tüm teknik indikatörleri hesaplar"""
@@ -40,58 +49,43 @@ class TechnicalAnalyzer:
         indicators = {}
 
         try:
-            # 1. RSI (Relative Strength Index)
+            # 1. ÖNCÜ (LEADING) GÖSTERGELER
             indicators["rsi"] = self._calc_rsi(df)
-
-            # 2. MACD
-            indicators["macd"] = self._calc_macd(df)
-
-            # 3. Bollinger Bands
-            indicators["bollinger"] = self._calc_bollinger(df)
-
-            # 4. SMA Crosses
-            indicators["sma_cross"] = self._calc_sma_cross(df)
-
-            # 5. EMA Crosses
-            indicators["ema_cross"] = self._calc_ema_cross(df)
-
-            # 6. Stochastic
+            indicators["rsi_divergence"] = self._calc_rsi_divergence(df)
             indicators["stochastic"] = self._calc_stochastic(df)
-
-            # 7. ADX
-            indicators["adx"] = self._calc_adx(df)
-
-            # 8. Williams %R
             indicators["williams_r"] = self._calc_williams_r(df)
-
-            # 9. CCI
             indicators["cci"] = self._calc_cci(df)
-
-            # 10. OBV
             indicators["obv_trend"] = self._calc_obv(df)
+            indicators["squeeze"] = self._calc_squeeze(df)
+            indicators["volume_spike"] = self._calc_volume_spike(df)
 
-            # 11. VWAP
+            # 2. ARTÇI (LAGGING) GÖSTERGELER
+            indicators["macd"] = self._calc_macd(df)
+            indicators["bollinger"] = self._calc_bollinger(df) # Lagging sayılır
+            indicators["sma_cross"] = self._calc_sma_cross(df)
+            indicators["ema_cross"] = self._calc_ema_cross(df)
+            indicators["adx"] = self._calc_adx(df)
             indicators["vwap"] = self._calc_vwap(df)
-
-            # 12. ATR (Average True Range)
-            indicators["atr"] = self._calc_atr(df)
-
-            # 13. Ichimoku Cloud
             indicators["ichimoku"] = self._calc_ichimoku(df)
-
-            # 14. Parabolic SAR
             indicators["parabolic_sar"] = self._calc_parabolic_sar(df)
 
-            # 15. Fibonacci Levels
+            # 3. DİĞER (DESTEK/DİRENÇ & FİBO)
+            indicators["atr"] = self._calc_atr(df)
             indicators["fibonacci"] = self._calc_fibonacci(df)
-
-            # 16. Support & Resistance
             indicators["support_resistance"] = self._calc_support_resistance(df)
-
-            # 17. Önceki Kapanış (Tavan kilidi ve marj hedefi için)
             indicators["previous_close"] = df['Close'].iloc[-2] if len(df) > 1 else df['Close'].iloc[-1]
+            
+            # İlk kırılım kontrolü (v2'nin kalbi)
+            indicators["first_breakout"] = self._check_first_breakout(df, indicators)
 
-            # Genel skor hesapla
+            # Sınıf Skorlarını Hesapla
+            leading_score = self._calculate_group_score(indicators, self.leading_weights)
+            lagging_score = self._calculate_group_score(indicators, self.lagging_weights)
+            
+            indicators["leading_score"] = leading_score
+            indicators["lagging_score"] = lagging_score
+            
+            # Genel skor hesapla (Yeni ağırlıklı)
             indicators["overall_score"] = self._calculate_overall_score(indicators)
             indicators["signal"] = self._generate_signal(indicators["overall_score"])
 
@@ -732,28 +726,132 @@ class TechnicalAnalyzer:
             "reason": reason
         }
 
+    def _calc_rsi_divergence(self, df: pd.DataFrame) -> dict:
+        """RSI Uyumsuzluğu (Divergence) tespiti - Gelişmiş Öncü Gösterge"""
+        try:
+            rsi_series = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
+            price_series = df['Close']
+            
+            # Son 20 barı inceleyelim
+            window = 15
+            if len(df) < window + 5:
+                return {"score": 50, "signal": "TUT", "description": "Yetersiz veri"}
+
+            # Boğa Uyumsuzluğu (Fiyat Yeni Dip, RSI Daha Yüksek Dip)
+            price_min_idx = price_series.iloc[-window:].idxmin()
+            rsi_min_idx = rsi_series.iloc[-window:].idxmin()
+            
+            # Eğer fiyatın en düşüğü ile RSI'ın en düşüğü farklı yerlerdeyse
+            bullish_div = False
+            if price_series.iloc[-1] <= price_series.iloc[price_min_idx] * 1.02: # Fiyat hala diplerde
+                if rsi_series.iloc[-1] > rsi_series.iloc[rsi_min_idx] + 2: # RSI yükselmeye başlamış
+                    bullish_div = True
+
+            if bullish_div:
+                return {"score": 85, "signal": "AL", "description": "🐂 POZİTİF UYUMSUZLUK (Boğa): Fiyat dipte, RSI yükseliyor!"}
+            
+            return {"score": 50, "signal": "TUT", "description": "Uyumsuzluk saptanmadı"}
+        except:
+            return {"score": 50, "signal": "TUT", "description": "Hata"}
+
+    def _calc_squeeze(self, df: pd.DataFrame) -> dict:
+        """Bollinger Sıkışması (Squeeze) - Patlama öncesi sessizlik"""
+        try:
+            bb = ta.volatility.BollingerBands(df['Close'])
+            upper = bb.bollinger_hband()
+            lower = bb.bollinger_lband()
+            bandwidth = (upper - lower) / bb.bollinger_mavg()
+            
+            # Son 100 barın ortalama genişliğiyle karşılaştır
+            avg_width = bandwidth.rolling(50).mean()
+            current_width = bandwidth.iloc[-1]
+            
+            is_squeezed = current_width < avg_width.iloc[-1] * 0.8
+            expanding = current_width > bandwidth.iloc[-2]
+            
+            if is_squeezed and expanding:
+                return {"score": 80, "signal": "AL", "description": "💥 SIKIŞMA KIRILIMI: Fiyat patlamaya hazır!"}
+            elif is_squeezed:
+                return {"score": 60, "signal": "TUT", "description": "⏳ SIKIŞMA: Enerji toplanıyor, kırılım bekleniyor."}
+            
+            return {"score": 50, "signal": "TUT", "description": "Normal oynaklık"}
+        except:
+            return {"score": 50, "signal": "TUT", "description": "Hata"}
+
+    def _calc_volume_spike(self, df: pd.DataFrame) -> dict:
+        """Hacim Patlaması - Gerçek kırılım onayı"""
+        try:
+            current_vol = df['Volume'].iloc[-1]
+            avg_vol = df['Volume'].iloc[-21:-1].mean()
+            
+            ratio = current_vol / avg_vol if avg_vol > 0 else 1
+            
+            if ratio > 3:
+                return {"score": 90, "signal": "AL", "description": f"🔥 HACİM PATLAMASI: Ortalama x{ratio:.1f}!"}
+            elif ratio > 1.5:
+                return {"score": 65, "signal": "AL", "description": "📈 Hacim artıyor."}
+            
+            return {"score": 50, "signal": "TUT", "description": "Normal hacim"}
+        except:
+            return {"score": 50, "signal": "TUT", "description": "Hata"}
+
+    def _check_first_breakout(self, df, indicators) -> dict:
+        """İLK KIRILIM TAKİBİ: %2-3 yapmışları yakalar, %5'i geçmişleri ignore eder"""
+        try:
+            current_price = df['Close'].iloc[-1]
+            prev_close = df['Close'].iloc[-2]
+            daily_pct = ((current_price / prev_close) - 1) * 100
+            
+            # Kırılım şartları:
+            # 1. Hacim yüksek olmalı
+            # 2. Öncü göstergeler (RSI, Squeeze vb) pozitif olmalı
+            # 3. Yükseliş henüz çok taze (%1.5 - %3.5 arası)
+            
+            is_early = 1.0 <= daily_pct <= 3.8
+            is_late = daily_pct > 5.0
+            
+            hacim_onay = indicators["volume_spike"]["score"] >= 65
+            squeeze_onay = indicators["squeeze"]["score"] >= 60
+            
+            if is_early and (hacim_onay or squeeze_onay):
+                return {"score": 95, "status": "EARLY", "description": f"🚀 İLK KIRILIM: %{daily_pct:.1f} yükselişle taze başlama!"}
+            elif is_late:
+                return {"score": 40, "status": "LATE", "description": "⚠️ GEÇ KALINDI: Hisse zaten %5+ gitmiş."}
+            
+            return {"score": 50, "status": "NONE"}
+        except:
+            return {"score": 50, "status": "NONE"}
+
+    def _calculate_group_score(self, indicators: dict, weights: dict) -> float:
+        """Grup bazlı (Leading/Lagging) skor hesaplar"""
+        total_w = 0
+        weighted_s = 0
+        for name, w in weights.items():
+            if name in indicators and "score" in indicators[name]:
+                weighted_s += indicators[name]["score"] * w
+                total_w += w
+        return round(weighted_s / total_w, 2) if total_w > 0 else 50.0
+
     def _calculate_overall_score(self, indicators: dict) -> float:
-        """Tüm indikatörlerin ağırlıklı ortalama skorunu hesaplar"""
-        total_weight = 0
-        weighted_score = 0
-
-        for indicator_name, weight in self.indicator_weights.items():
-            if indicator_name in indicators and "score" in indicators[indicator_name]:
-                score = indicators[indicator_name]["score"]
-                weighted_score += score * weight
-                total_weight += weight
-
-        if total_weight == 0:
-            return 50.0
-
-        return round(weighted_score / total_weight, 2)
+        """Tüm indikatörlerin ağırlıklı ortalama skorunu hesaplar (v2: Öncü ağırlıklı)"""
+        # Leading (Öncü) %65, Lagging (Artçı) %35 ağırlıklı
+        leading = indicators.get("leading_score", 50)
+        lagging = indicators.get("lagging_score", 50)
+        
+        # Eğer ilk kırılım varsa skoru yukarı çek
+        breakout_bonus = 0
+        if indicators.get("first_breakout", {}).get("status") == "EARLY":
+            breakout_bonus = 10
+        
+        final_score = (leading * 0.65) + (lagging * 0.35) + breakout_bonus
+        return round(min(100, final_score), 2)
 
     def _generate_signal(self, score: float) -> dict:
         """Skora göre sinyal üretir"""
-        if score >= 75:
-            return {"action": "GÜÇLÜ AL", "emoji": "🟢🟢", "confidence": "Yüksek"}
-        elif score >= 60:
-            return {"action": "AL", "emoji": "🟢", "confidence": "Orta"}
+        if score >= 80:
+            return {"action": "GÜÇLÜ AL", "emoji": "🚀🚀", "confidence": "Çok Yüksek"}
+        elif score >= 65:
+            return {"action": "AL", "emoji": "🚀", "confidence": "Yüksek"}
         elif score <= 25:
             return {"action": "GÜÇLÜ SAT", "emoji": "🔴🔴", "confidence": "Yüksek"}
         elif score <= 40:

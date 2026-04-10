@@ -40,28 +40,30 @@ class Notifier:
             return False
 
     def send_buy_signal(self, symbol, current_price, target_price, stop_price, onay_notu):
-        mesaj = f"""🟢 <b>ALIM SİNYALİ (Sadece 6/6 Tam Onayda Gönderilir)</b>
-<b>{symbol}</b> - AL
-💰 <b>Anlık Fiyat:</b> {current_price:.2f} TL
-🎯 <b>Hedef Fiyat:</b> {target_price:.2f} TL
-🛑 <b>Zarar Kes:</b> {stop_price:.2f} TL
+        mesaj = f"""🚀 <b>A-SINIFI SİNYAL (Smart Engine v2)</b>
+<b>#{symbol}</b> - GÜÇLÜ AL
+💰 <b>Fiyat:</b> {current_price:.2f} TL
+🎯 <b>Hedef:</b> {target_price:.2f} TL (<b>%4.8+</b>)
+🛑 <b>Stop:</b> {stop_price:.2f} TL
 
 {onay_notu}
-(Not: Bu mesaj sadece tüm parametreler onaylandığında düşer.)"""
+
+💪 <i>Bu sinyal v2 motoru tarafından 1-10 arası yüksek puanlanmıştır.</i>"""
         return self.send_message(mesaj)
 
     def send_b_class_signal(self, symbol, current_price, target_price, stop_price, onay_notu):
-        mesaj = f"""🥈 <b>B SINIFI FIRSAT (6/6 Tam Onay)</b>
-<b>{symbol}</b> - AL (Hedef %4.5+)
-💰 <b>Anlık Fiyat:</b> {current_price:.2f} TL
-🎯 <b>Hedef Fiyat:</b> {target_price:.2f} TL
-🛑 <b>Zarar Kes:</b> {stop_price:.2f} TL
+        mesaj = f"""🥈 <b>B-SINIFI FIRSAT (Smart Engine v2)</b>
+<b>#{symbol}</b> - AL
+💰 <b>Fiyat:</b> {current_price:.2f} TL
+🎯 <b>Hedef:</b> {target_price:.2f} TL
+🛑 <b>Stop:</b> {stop_price:.2f} TL
 
 {onay_notu}
-🔍 <i>Not: Bu hisse ana hedefin (%5.2) biraz altında ama 6/6 onaylı olduğu için kaçırılmamalıdır.</i>"""
+
+🔍 <i>v2 motoru tarafından taranmış, risk/ödül dengesi uygun sinyal.</i>"""
         return self.send_message(mesaj)
 
-    def send_sell_signal(self, symbol, fiyat, tahmini_dip, bozulan_parametreler, guncel_bakiye=200, kar_zarar=0):
+    def send_sell_signal(self, symbol, fiyat, tahmini_dip, bozulan_parametreler, guncel_bakiye=200, kar_zarar=0, fiyat_hedef=0):
         ilerleme = min(100, (guncel_bakiye / 100000) * 100)
         mesaj = f"""🔴 <b>SATIŞ SİNYALİ (Düşüş Tahmini ve Bozulma Raporu)</b>
 <b>{symbol}</b> - SAT

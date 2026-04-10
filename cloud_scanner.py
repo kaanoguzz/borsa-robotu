@@ -8,12 +8,13 @@ AL sinyali bulursa Telegram'dan bildirim gönderir.
 GitHub Actions üzerinde her 15 dk'da bir otomatik çalışır.
 """
 
+import shutil
+import time
 import os
 import sys
 import logging
 import requests
 import ssl
-import shutil
 from datetime import datetime, timezone, timedelta
 
 # ===== SSL Sertifika Fix (Windows Türkçe Kullanıcı Adı & GitHub Actions) =====
@@ -34,6 +35,13 @@ try:
 except AttributeError:
     pass
 # ============================================================================
+
+# ===== .env Yükleme (EN BAŞTA - Telegram token'ları için gerekli) =====
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 TZ_TR = timezone(timedelta(hours=3))
 
@@ -185,8 +193,8 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 # ==================== TELEGRAM KOMUT DİNLEYİCİ ====================
-def process_user_commands(pm, notifier, dc):
-    """Telegram'dan gelen kullanıcı komutlarını (Hisse aldım/sattım) işler"""
+def process_user_commands(pm, notifier, dc, sg):
+    """Telegram'dan gelen kullanıcı komutlarını işler"""
     offset_file = "telegram_offset.txt"
     offset = 0
     if os.path.exists(offset_file):
@@ -298,9 +306,8 @@ def process_user_commands(pm, notifier, dc):
 
         # YARIN TAHMİNİ (ÖZEL KOMUT)
         if forecast_pattern.match(text):
-            notifier.send_message("🔮 <b>Yarın için derin analiz başlatıldı...</b>\nBIST 100 hisseleri 4 katmanlı AI filtresinden geçiriliyor. Bu işlem yaklaşık 5 dakika sürebilir efendim.")
-            # Arka planda değil, direkt çalıştırıyoruz çünkü bu cloud_scanner zaten bir döngüde değil, script olarak çağrılıyor.
-            # Ama timeout olmaması için dikkatli olmalıyız.
+            notifier.send_message("🔮 <b>Yarın için derin analiz başlatıldı...</b>\nBIST 100 hisseleri topluca taranıyor. Lütfen bekleyiniz efendim.")
+            # Hızlı bulk analiz fonksiyonunu çağır
             send_tomorrow_forecast(pm, notifier, dc)
             continue
 
@@ -333,151 +340,98 @@ def process_user_commands(pm, notifier, dc):
             notifier.send_message(msg)
             continue
 
-        # ENDEKS NABIZ
+        # 6. ENDEKS
         if market_pattern.match(text):
             try:
                 xu100 = dc.get_current_price("XU100.IS")
-                price = xu100.get("price", 0)
                 change = xu100.get("change_percent", 0)
-                risk = "YÜKSEK (Şelale Riski! 🚨)" if change < -0.4 else "ORTA ⚠️" if change < -0.2 else "DÜŞÜK 🛡️"
-                
-                pulse_data = {
-                    "price": price,
-                    "change": change,
-                    "risk_level": risk,
-                    "comment": "Endeks direnç seviyesinde." if change > 0 else "Destek seviyeleri takip ediliyor."
-                }
-                notifier.send_market_pulse(pulse_data)
+                risk = "🚨 Şelale Riski!" if change < -0.4 else "🛡️ Düşük Risk" if change > 0 else "⚠️ Orta Risk"
+                notifier.send_market_pulse({"price": xu100.get("price", 0), "change": change, "risk_level": risk, "comment": "Analiz tamamlandı."})
                 continue
-            except:
-                pass
+            except: pass
 
-        # HİSSE ANALİZ (İLERİ SEVİYE)
+        # 7. HİSSE ANALİZ
         analyze_match = analyze_pattern.match(text)
         if analyze_match:
             symbol = analyze_match.group(1).upper()
-            notifier.send_message(f"🔍 <b>{symbol}</b> için 4 katmanlı derin analiz başlatıldı, lütfen bekleyiniz efendim...")
-            
-            try:
-                from signal_generator import SignalGenerator
-                sg_temp = SignalGenerator()
-                report = sg_temp.analyze_stock(symbol, quick_mode=True)
-                
-                curr_price = report.get("price", 0)
-                analysis_data = {
-                    "symbol": symbol,
-                    "price": curr_price,
-                    "overall_score": report.get("overall_score", 0),
-                    "reason": report.get("signal", {}).get("reason", "Hisse stabil."),
-                    "target": report.get("target", curr_price * 1.05),
-                    "stop": report.get("stop", curr_price * 0.97),
-                    "rsi": report.get("technical_analysis", {}).get("rsi", 0),
-                    "trend": report.get("technical_analysis", {}).get("trend", "Yatay")
-                }
-                notifier.send_analysis_report(analysis_data)
-                continue
-            except Exception as e:
-                logger.error(f"Analiz hatasi: {e}")
-                notifier.send_message(f"❌ {symbol} analizi sırasında bir hata oluştu. Lütfen tekrar deneyiniz.")
-                continue
+            notifier.send_message(f"🔍 <b>#{symbol} Hisse Analizi...</b>\nDerin tarama başlatıldı.")
+            result = sg.analyze_stock(symbol, skip_backtest=True, quick_mode=False)
+            if result: notifier.send_analysis_report(result)
+            continue
 
-        # BAKİYE GÜNCELLEME KOMUTU
+        # 8. AL/SAT/BAKİYE (Hızlı)
         bakiye_match = bakiye_pattern.match(text)
         if bakiye_match:
             try:
                 new_bal = float(bakiye_match.group(2).replace(",", "."))
                 pm.set_balance(new_bal)
-                notifier.send_message(f"💰 <b>Tamamdır efendim, bakiyeniz {new_bal:.2f} TL olarak güncellendi.</b>\n🏁 Hedef takibindeki ilerleme barı buna göre ayarlanıyor.")
-                logger.info(f"Telegram Komutu: Bakiye guncellendi: {new_bal}")
+                notifier.send_message(f"💰 <b>Bakiye {new_bal:.2f} TL olarak güncellendi.</b>")
                 continue
-            except Exception as e:
-                logger.error(f"Bakiye guncelleme hatasi: {e}")
+            except: pass
 
-        # ALIM KOMUTU
         buy_match = buy_pattern.match(text)
         if buy_match:
             symbol = buy_match.group(1).upper()
-            price_str = buy_match.group(2)
-            
-            # Belirtilen fiyat varsa onu kullan, yoksa canlı fiyatı al
-            if price_str:
-                price = float(price_str.replace(",", "."))
-            else:
-                price_data = dc.get_current_price(symbol)
-                price = price_data["price"] if price_data else 0
-
+            price_data = dc.get_current_price(symbol)
+            price = float(buy_match.group(2).replace(",", ".")) if buy_match.group(2) else price_data.get("price", 0)
             if price > 0:
-                # Önceki kapanış bilgisini de (Tavan kilidi için) çekmeye çalış
-                prev_close = 0
-                try:
-                    import yfinance as yf
-                    ticker = yf.Ticker(f"{symbol}.IS")
-                    prev_close = ticker.info.get("previousClose", 0)
-                except:
-                    pass
-
-                # Bakiyeyi kontrol et ve adet hesapla
                 bakiye = pm.get_balance()
-                if bakiye > 10: # Minimum işlem tutarı
-                    komisyon = bakiye * 0.002
-                    net_bakiye = bakiye - komisyon
-                    adet = net_bakiye / price
-                    
-                    # Hedef ve stopları otomatik hesapla (ATR bazlı)
-                    # Not: cloud_scanner ana analizinden de gelebilir ama burada hızlı ATR yapalım
-                    pm.add_stock(symbol, adet, price, target_price=price*1.05, stop_loss=price*0.97, notes="Manuel Telegram Komutu", previous_close=prev_close)
-                    
-                    notifier.send_message(f"✅ <b>Tamam efendim, {symbol} takibe alındı!</b>\n💰 Fiyat: {price:.2f} TL\n📦 Adet: {adet:.2f}\n🛡️ Zırhlar ve Takip Sistemi aktif edildi.")
-                    logger.info(f"Telegram Komutu: {symbol} alindi.")
+                if bakiye > 10:
+                    adet = (bakiye * 0.998) / price
+                    pm.add_stock(symbol, adet, price, target_price=price*1.05, stop_loss=price*0.97)
+                    notifier.send_message(f"✅ <b>{symbol} takibe alındı!</b>\nFiyat: {price:.2f} TL")
                 else:
-                    notifier.send_message(f"⚠️ Bakiye yetersiz ({bakiye:.2f} TL). Alım yapılamadı.")
+                    notifier.send_message(f"⚠️ Bakiye yetersiz.")
+            continue
 
-        # SATIM KOMUTU
         sell_match = sell_pattern.match(text)
         if sell_match:
             symbol = sell_match.group(1).upper()
-            price_str = sell_match.group(2)
-            
-            # Portföyde var mı?
             holdings = pm.get_holdings_dict()
             if symbol in holdings:
-                # Belirtilen fiyat varsa onu kullan, yoksa canlı fiyatı al
-                if price_str:
-                    price = float(price_str.replace(",", "."))
-                else:
-                    price_data = dc.get_current_price(symbol)
-                    price = price_data["price"] if price_data else holdings[symbol]["maliyet"]
-                
-                qty = holdings[symbol]["adet"]
-                
-                res = pm.remove_stock(symbol, qty, price, reason="Manuel Telegram Komutu")
-                if res["success"]:
-                    notifier.send_message(f"🚨 <b>Tamamdır efendim, {symbol} satıldı.</b>\n💰 Satış Fiyatı: {price:.2f} TL\n📈 Kâr/Zarar: {res['profit_loss']:+.2f} TL\n🏁 Hedef takibi ve ilerleme çubuğu güncellendi.")
-                    logger.info(f"Telegram Komutu: {symbol} satildi.")
+                price_data = dc.get_current_price(symbol)
+                price = price_data["price"] if price_data else holdings[symbol]["maliyet"]
+                res = pm.remove_stock(symbol, holdings[symbol]["adet"], price)
+                notifier.send_message(f"🚨 <b>{symbol} satıldı.</b>\nKâr/Zarar: {res.get('profit_loss', 0):+.2f} TL")
             else:
-                notifier.send_message(f"❌ {symbol} portföyünüzde bulunamadı.")
+                notifier.send_message(f"❌ {symbol} portföyde yok.")
+            continue
+
+        # 9. FALLBACK (ANLAŞILMAYAN)
+        if text:
+            notifier.send_message("🤔 <b>Bunu tam anlayamadım efendim.</b>\nLütfen farklı şekilde sormayı deneyin veya <code>yardim</code> yazın.")
 
     # Yeni offseti kaydet
-    with open(offset_file, "w") as f:
-        f.write(str(max_id))
+    if max_id > offset:
+        with open(offset_file, "w") as f:
+            f.write(str(max_id))
 
 
 def send_tomorrow_forecast(pm, notifier, dc):
-    """Yarın için en iyi 5 hisseyi bulur ve gönderir"""
+    """Yarın için en iyi 5 hisseyi bulur ve gönderir (BULK DOWNLOAD MODU)"""
     try:
         from signal_generator import SignalGenerator
         from config import BIST100_TICKERS
+        import yfinance as yf
+        
         sg = SignalGenerator()
         
-        buy_candidates = []
-        logger.info("Yarin tahmini taramasi basladi...")
+        # 1. TOPLU VERİ ÇEK (Çok daha hızlı)
+        logger.info(f"Yarin tahmini için {len(BIST100_TICKERS)} hisse toplu indiriliyor...")
+        raw_data = yf.download(BIST100_TICKERS, period="1y", interval="1d", group_by='ticker', threads=True, progress=False)
         
-        # Filtreyi biraz esneterek en iyi 5'i bulmayı garantileyelim
-        # Ama yine de belli bir kalite standardı olsun (Skor > 55)
-        for i, symbol in enumerate(BIST100_TICKERS):
+        buy_candidates = []
+        
+        # 2. ANALİZ
+        for symbol in BIST100_TICKERS:
             try:
-                # Deep scan (quick_mode=False)
-                result = sg.analyze_stock(symbol, skip_backtest=True, quick_mode=False)
+                # Veriyi al
+                symbol_df = raw_data[symbol]
+                if symbol_df is None or symbol_df.empty: 
+                    continue
+
+                # Quick mode ile tara ama bulk veriyi bas
+                result = sg.analyze_stock(symbol, skip_backtest=True, quick_mode=False, external_df=symbol_df)
                 if not result: continue
                 
                 score = result.get("overall_score", 0)
@@ -493,9 +447,6 @@ def send_tomorrow_forecast(pm, notifier, dc):
                         "reason": result.get("signal", {}).get("reason", "Güçlü teknik görünüm."),
                         "date": datetime.now(TZ_TR).strftime("%d.%m.%Y")
                     })
-                
-                if (i+1) % 20 == 0:
-                    logger.info(f"Yarin taramasi: {i+1}/100...")
             except:
                 continue
         
@@ -510,52 +461,96 @@ def send_tomorrow_forecast(pm, notifier, dc):
 
 # ==================== ANA TARAMA ====================
 def run_cloud_scan():
+    # Loop Değişkenleri
+    START_TIME = time.time()
+    MAX_LOOP_TIME = 4 * 60   # 4 dakika uyanık kal (GitHub cron 5 dk'da bir gelir)
+    POLL_INTERVAL = 15       # 15 saniyede bir Telegram'ı kontrol et
+    LAST_SCAN_TIME = 0       # Son tarama zamanı
+    SCAN_INTERVAL = 30 * 60  # Her 30 dakikada bir tam tarama yap
+    
     now_tr = datetime.now(TZ_TR)
-    logger.info(f"Tarama baslatiliyor: {now_tr.strftime('%d.%m.%Y %H:%M')} (TR)")
+    logger.info(f"Oto-Robot 'ALWAYS-ON' Modunda Baslatildi: {now_tr.strftime('%d.%m.%Y %H:%M')}")
 
-    # ==================== KULLANICI KOMUTLARI ====================
-    try:
-        from portfolio import PortfolioManager
-        from notifier import Notifier
-        from data_collector import DataCollector
-        
-        pm = PortfolioManager()
-        notifier = Notifier()
-        dc = DataCollector()
-        
-        process_user_commands(pm, notifier, dc)
-    except Exception as e:
-        logger.error(f"Kullanici komutu isleme hatasi: {e}")
+    # Objeleri bir kere oluştur (performans)
+    from portfolio import PortfolioManager
+    from notifier import Notifier
+    from data_collector import DataCollector
+    from signal_generator import SignalGenerator
+    
+    pm = PortfolioManager()
+    notifier = Notifier()
+    dc = DataCollector()
+    sg = SignalGenerator()
 
-    # ==================== PAZAR SAATİ KONTROLÜ ====================
-    # ==================== CLOUD HEARTBEAT (GÜVEN BİLDİRİMİ) ====================
-    # Gün içindeki ilk çalıştırmada (saat 10:00 civarı) kullanıcının telefonuna
-    # "Sistem Hazır" bildirimi gönderir.
-    if now_tr.hour == 10 and now_tr.minute < 10:
-        heartbeat_file = "cloud_heartbeat.status"
-        # Eğer bugün bildirim gönderilmemişse gönder
-        today_str = now_tr.strftime('%Y-%m-%d')
-        if not os.path.exists(heartbeat_file) or open(heartbeat_file).read().strip() != today_str:
-            send_telegram(
-                f"✅ <b>BULUT TARAYICI AKTİF</b>\n\n"
-                f"📅 Tarih: {now_tr.strftime('%d.%m.%Y')}\n"
-                f"⏰ Saat: {now_tr.strftime('%H:%M')}\n"
-                f"🤖 Durum: Sistem sorunsuz, tarama başlıyor.\n\n"
-                f"<i>İyi seanslar dilerim efendim.</i>"
-            )
+    # ===== HEARTBEAT: Borsa açılışında güven bildirimi =====
+    _send_heartbeat_if_needed(now_tr)
+
+    while True:
+        # 1. LOOP ÇIKIŞ KONTROLÜ (GitHub Action zaman aşımı riski)
+        elapsed = time.time() - START_TIME
+        if elapsed > MAX_LOOP_TIME:
+            logger.info("Maksimum loop süresine ulaşıldı, oturum kapatılıyor.")
+            break
+
+        now_tr = datetime.now(TZ_TR)
+        
+        # 2. KOMUTLARI İŞLE (ANLIK TEPKİ)
+        try:
+            process_user_commands(pm, notifier, dc, sg)
+        except Exception as e:
+            logger.error(f"Kullanici komutu isleme hatasi: {e}")
+
+        # 3. PAZAR SAATİ AKTİF Mİ?
+        scan_due = (time.time() - LAST_SCAN_TIME) >= SCAN_INTERVAL
+        
+        if is_market_hours() and scan_due:
+            perform_main_scan(now_tr, pm, notifier, dc, sg)
+            LAST_SCAN_TIME = time.time()
+            
+        # 4. BEKLE (POLLING HEARTBEAT)
+        time.sleep(POLL_INTERVAL)
+
+
+def _send_heartbeat_if_needed(now_tr):
+    """Borsa açılış saatinde (10:00) güven bildirimi gönderir"""
+    if now_tr.weekday() >= 5:  # Hafta sonu
+        return
+    # Sadece 10:00-10:15 arasında heartbeat gönder
+    if not (now_tr.hour == 10 and now_tr.minute <= 15):
+        return
+    
+    heartbeat_file = "cloud_heartbeat.status"
+    today_str = now_tr.strftime('%Y-%m-%d')
+    
+    already_sent = False
+    if os.path.exists(heartbeat_file):
+        try:
+            with open(heartbeat_file, 'r') as f:
+                already_sent = f.read().strip() == today_str
+        except:
+            pass
+    
+    if not already_sent:
+        send_telegram(
+            f"✅ <b>BULUT TARAYICI AKTİF</b>\n\n"
+            f"📅 Tarih: {now_tr.strftime('%d.%m.%Y')}\n"
+            f"⏰ Saat: {now_tr.strftime('%H:%M')}\n"
+            f"🤖 Durum: Sistem sorunsuz, tarama başlıyor.\n\n"
+            f"<i>İyi seanslar dilerim efendim.</i>"
+        )
+        try:
             with open(heartbeat_file, "w") as f:
                 f.write(today_str)
-            logger.info("Heartbeat bildirimi gönderildi.")
+        except:
+            pass
+        logger.info("Heartbeat bildirimi gönderildi.")
 
+def perform_main_scan(now_tr, pm, notifier, dc, sg):
+    logger.info(f"Piyasa Taraması Başlatılıyor: {now_tr.strftime('%H:%M')}")
+    
     if not is_market_hours():
         logger.info("Borsa kapali - tarama ve sinyal kontrolü atlaniyor.")
         return
-
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        pass
 
     try:
         from signal_generator import SignalGenerator
@@ -672,69 +667,75 @@ def run_cloud_scan():
             logger.warning(f"Makro enjeksiyon hatası: {e}")
 
     # ==================== PARALEL TARAMA FONKSİYONU ====================
+    notifier_local = Notifier()
+
     def scan_worker(symbol):
+        """Tek bir hisseyi paralel olarak tarar"""
         try:
-            # Bu hisseye ait veriyi çek
+            # Bulk download'dan bu sembolün verisini al
             try:
                 symbol_df = raw_data[symbol]
                 if symbol_df is None or symbol_df.empty:
                     return None
-            except (KeyError, ValueError):
+            except (KeyError, TypeError):
                 return None
 
-            # Her thread için kendi modüllerini kullanmak daha güvenli
-            from portfolio import PortfolioManager
-            from notifier import Notifier
-            
-            pm_local = PortfolioManager()
-            notifier_local = Notifier()
-            
             # TAM ANALİZ: external_df ile hızlı ve güvenli besleme
             result = sg.analyze_stock(symbol, skip_backtest=True, quick_mode=False, external_df=symbol_df)
             if not result:
                 return None
 
-            signal = result.get("signal", {})
-            action = signal.get("action", "TUT")
+            v2_signal = result.get("v2_signal", {})
+            v1_signal = result.get("v1_signal", {})
+            
+            action = v2_signal.get("action", "TUT")
             score = result.get("overall_score", 50)
+            tks = v2_signal.get("quality_score", 0)
             price = result.get("current_price", 0)
-            reason = signal.get("reason", "")
+            reason = v2_signal.get("reason", "")
+            is_early = v2_signal.get("is_early", False)
+
+            # Sinyal Sonucunu Kaydet (Paylaşımlı breakout sayacı için)
+            if is_early:
+                with breakout_lock:
+                    breakout_count[0] += 1
 
             # ===== AL SİNYALİ KONTROLÜ (ANLIK) =====
-            if "AL" in action and score >= 55:
+            # v2 Onaylıysa veya v1 Onaylıysa
+            if (v2_signal.get("passed") or v1_signal.get("passed")) and score >= 55:
                 targets = calculate_targets(symbol, result)
                 
-                # Baraj kontrolü (%4.5)
+                # Baraj kontrolü (%4.8 - Kullanıcı isteği sabitlemesi)
                 if targets["target_pct"] >= 4.5:
-                    onay_notu = f"✅ Teknik ✅ Hacim ✅ AKD ✅ Haber ✅ Makro ✅ Risk\n📝 {reason}"
+                    onay_notu = f"{'💎 v1 (6/6) & ' if v1_signal.get('passed') else ''}🚀 v2 (4/6) Onaylı\n"
+                    onay_notu += f"📊 <b>Kalite Skoru (TKS): {tks}/10</b>\n"
+                    onay_notu += f"📝 {reason}"
                     
-                    if targets["target_pct"] >= 5.2:
-                        # A-Class
+                    if tks >= 7:
+                        # A-Class (Yüksek Kalite)
                         notifier_local.send_buy_signal(
                             symbol=symbol,
                             current_price=price,
                             target_price=targets["target"],
                             stop_price=targets["stop"],
-                            onay_notu=onay_notu
+                            onay_notu=onay_notu + "\n\n💪 <b>GÜÇLÜ SİNYAL: FULL GİRİLEBİLİR</b>"
                         )
-                        logger.info(f"ANLIK A-SINIFI: {symbol} (%{targets['target_pct']})")
+                        logger.info(f"ANLIK A-SINIFI (v2): {symbol} (%{targets['target_pct']}) TKS: {tks}")
                     else:
-                        # B-Class
+                        # B-Class (Orta Kalite)
                         notifier_local.send_b_class_signal(
                             symbol=symbol,
                             current_price=price,
                             target_price=targets["target"],
                             stop_price=targets["stop"],
-                            onay_notu=onay_notu
+                            onay_notu=onay_notu + "\n\n⚠️ <i>Küçük lotlarla denenebilir.</i>"
                         )
-                        logger.info(f"ANLIK B-SINIFI: {symbol} (%{targets['target_pct']})")
+                        logger.info(f"ANLIK B-SINIFI (v2): {symbol} (%{targets['target_pct']}) TKS: {tks}")
                     
-                    return {"type": "BUY", "symbol": symbol, "score": score}
+                    return {"type": "BUY", "symbol": symbol, "score": score, "v1": v1_signal.get("passed"), "tks": tks}
 
             # ===== SAT SİNYALİ KONTROLÜ (ANLIK - Sadece çok güçlü sinyaller için) =====
             elif "SAT" in action and score <= 40:
-                # Sat sinyalleri genelde çok fazladır, o yüzden sadece en kötüleri veya 
-                # genel özeti gönderiyoruz (mevcut mantık korunabilir veya anlık yapılabilir)
                 return {"type": "SELL", "symbol": symbol, "score": score, "reason": reason, "price": price}
 
             return {"type": "KEEP", "symbol": symbol}
@@ -743,15 +744,18 @@ def run_cloud_scan():
             logger.error(f"{symbol} paralel tarama hatasi: {e}")
             return None
 
-    # ThreadPool ile taramayı başlat
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+    
+    breakout_lock = threading.Lock()
+    breakout_count = [0]
     
     buy_count = 0
     sell_signals = []
     all_analyzed = 0
     total = len(BIST100_TICKERS)
     
-    logger.info(f"Toplam {total} hisse paralel taranacak (Ayni anda 6 hisse)...")
+    logger.info(f"Toplam {total} hisse paralel taranacak (v2 Smart Engine)...")
     
     with ThreadPoolExecutor(max_workers=6) as executor:
         futures = {executor.submit(scan_worker, sym): sym for sym in BIST100_TICKERS}
@@ -768,8 +772,25 @@ def run_cloud_scan():
             if (i + 1) % 10 == 0:
                 logger.info(f"İlerleme: [{i+1}/{total}] tamamlandi...")
 
+    # ==================== GÜN SKORU HESAPLA ====================
+    day_score_data = sg.macro_analyzer.calculate_day_score(
+        xu100_df=macro_data["XU100.IS"],
+        total_breakouts=breakout_count[0]
+    )
+    
+    # Gün Özeti Bildirimi
+    score = day_score_data["score"]
+    status = day_score_data["status"]
+    reasons = "\n".join(day_score_data["reasons"])
+    
+    msg = f"🔍 <b>PİYASA GÜN SKORU: {score}/3</b>\n"
+    msg += f"📊 Durum: <b>{status}</b>\n\n"
+    msg += f"{reasons}\n\n"
+    msg += f"<i>{all_analyzed} hisse tıkır tıkır analiz edildi. v2 motoru devrede.</i>"
+    send_telegram(msg)
+
     # ==================== SONUÇLAR ====================
-    logger.info(f"Tarama bitti: {all_analyzed} analiz, {buy_count} AL sinyali gonderildi.")
+    logger.info(f"Tarama bitti: {all_analyzed} analiz, Day Score: {score}/3")
 
     # ===== SAT SİNYALLERİ ÖZETİ (Grup halinde gönderim) =====
     if sell_signals:
@@ -806,14 +827,12 @@ if __name__ == "__main__":
     try:
         run_cloud_scan()
     except Exception as e:
+        import traceback
         error_msg = f"❌ <b>SİSTEM HATASI</b>\n\n⚠️ Beklenmedik bir hata oluştu ve tarayıcı durdu.\n\n🔍 <b>Hata:</b> {str(e)[:200]}"
         try:
-            from cloud_scanner import send_telegram  # Re-import test
             send_telegram(error_msg)
         except:
             print(f"Telegram error reporting failed: {e}")
         
-        # Log the full traceback
-        import traceback
         logging.error(f"Kritik sistem hatası:\n{traceback.format_exc()}")
         sys.exit(1)

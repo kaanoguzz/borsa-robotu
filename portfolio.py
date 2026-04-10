@@ -58,22 +58,44 @@ class PortfolioManager:
             )
         """)
 
-        # Sinyal geçmişi tablosu
+        # Sinyal geçmişi tablosu (v2 Pro - Analytics)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT NOT NULL,
                 signal_type TEXT NOT NULL,
+                version TEXT DEFAULT 'v1',
                 score REAL NOT NULL,
+                quality_score REAL DEFAULT 0,
                 technical_score REAL DEFAULT 0,
                 news_score REAL DEFAULT 0,
                 ml_score REAL DEFAULT 0,
                 price_at_signal REAL DEFAULT 0,
+                max_price_seen REAL DEFAULT 0,
+                min_price_seen REAL DEFAULT 0,
+                outcome_pct REAL DEFAULT 0,
                 description TEXT DEFAULT '',
                 notified INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # Migration: Eğer eski tablo varsa kolonları ekle
+        try:
+            cursor.execute("ALTER TABLE signals ADD COLUMN version TEXT DEFAULT 'v1'")
+        except: pass
+        try:
+            cursor.execute("ALTER TABLE signals ADD COLUMN quality_score REAL DEFAULT 0")
+        except: pass
+        try:
+            cursor.execute("ALTER TABLE signals ADD COLUMN max_price_seen REAL DEFAULT 0")
+        except: pass
+        try:
+            cursor.execute("ALTER TABLE signals ADD COLUMN min_price_seen REAL DEFAULT 0")
+        except: pass
+        try:
+            cursor.execute("ALTER TABLE signals ADD COLUMN outcome_pct REAL DEFAULT 0")
+        except: pass
 
         # Watchlist tablosu (takip listesi)
         cursor.execute("""
@@ -413,16 +435,18 @@ class PortfolioManager:
 
     def save_signal(self, symbol: str, signal_type: str, score: float,
                     technical_score: float = 0, news_score: float = 0,
-                    ml_score: float = 0, price: float = 0, description: str = "") -> int:
-        """Sinyal kaydeder"""
+                    ml_score: float = 0, price: float = 0, 
+                    description: str = "", version: str = "v1", quality_score: float = 0) -> int:
+        """Sinyal kaydeder (Pro Analytics Destekli)"""
         conn = self._get_conn()
         cursor = conn.cursor()
 
         cursor.execute(
-            """INSERT INTO signals (symbol, signal_type, score, technical_score, 
-               news_score, ml_score, price_at_signal, description) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (symbol, signal_type, score, technical_score, news_score, ml_score, price, description)
+            """INSERT INTO signals (symbol, signal_type, version, score, quality_score, technical_score, 
+               news_score, ml_score, price_at_signal, max_price_seen, min_price_seen, description) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, signal_type, version, score, quality_score, technical_score, 
+             news_score, ml_score, price, price, price, description)
         )
 
         signal_id = cursor.lastrowid
@@ -430,6 +454,35 @@ class PortfolioManager:
         conn.close()
         
         return signal_id
+
+    def update_signal_analytics(self, symbol: str, current_price: float):
+        """Aktif sinyallerin (son 5 gün) MAE/MFE değerlerini günceller"""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        
+        # Son 5 gün içindeki sinyalleri güncelle
+        cursor.execute("""
+            SELECT id, price_at_signal, max_price_seen, min_price_seen 
+            FROM signals 
+            WHERE symbol = ? AND created_at > datetime('now', '-5 days')
+        """, (symbol.upper(),))
+        
+        signals = cursor.fetchall()
+        for sid, entry_price, max_seen, min_seen in signals:
+            new_max = max(max_seen, current_price)
+            new_min = min(min_seen, current_price) if min_seen > 0 else current_price
+            
+            # Güncel performans %
+            outcome = ((current_price / entry_price) - 1) * 100 if entry_price > 0 else 0
+            
+            cursor.execute("""
+                UPDATE signals 
+                SET max_price_seen = ?, min_price_seen = ?, outcome_pct = ? 
+                WHERE id = ?
+            """, (new_max, new_min, outcome, sid))
+            
+        conn.commit()
+        conn.close()
 
     def mark_signal_notified(self, signal_id: int):
         """Sinyali bildirildi olarak işaretle"""

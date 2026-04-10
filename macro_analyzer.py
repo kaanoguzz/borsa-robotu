@@ -369,3 +369,56 @@ class MacroAnalyzer:
             },
             "calculated_at": datetime.now().isoformat()
         }
+
+    def calculate_day_score(self, xu100_df: pd.DataFrame, total_breakouts: int) -> dict:
+        """🔍 GÜN SKORU: Piyasanın genel havasını 0-3 arası puanlar"""
+        score = 0
+        reasons = []
+        
+        try:
+            # 1. Endeks Yönü (+1 / -1)
+            current = xu100_df['Close'].iloc[-1]
+            prev = xu100_df['Close'].iloc[-2]
+            change = ((current / prev) - 1) * 100
+            
+            if change > 0:
+                score += 1
+                reasons.append(f"📈 Endeks Pozitif (%{change:.2f})")
+            else:
+                score -= 1
+                reasons.append(f"📉 Endeks Negatif (%{change:.2f})")
+                
+            # 2. Toplam Breakout Sayısı (+1)
+            # Eğer 100 hissede 7 taneden fazla taze kırılım varsa piyasada coşku vardır
+            if total_breakouts >= 7:
+                score += 1
+                reasons.append(f"🚀 Piyasa Coşkulu ({total_breakouts} Breakout)")
+            
+            # 3. Hacim Genel Artış (+1)
+            current_vol = xu100_df['Volume'].iloc[-1]
+            avg_vol = xu100_df['Volume'].iloc[-21:-1].mean()
+            vol_ratio = current_vol / avg_vol if avg_vol > 0 else 1
+            
+            if vol_ratio > 1.15:
+                score += 1
+                reasons.append(f"📊 Genel Hacim Artışı (x{vol_ratio:.1f})")
+                
+            # Skor Sınırlandırma (0-3)
+            final_score = max(0, min(3, score))
+            
+            if final_score >= 3:
+                status = "🚀 YÜKLEN (Senin Günün!)"
+            elif final_score == 2:
+                status = "✅ NORMAL (Hisseni Seç)"
+            else:
+                status = "⚠️ TEMKİNLİ (Zorlama)"
+                
+            return {
+                "score": final_score,
+                "status": status,
+                "reasons": reasons,
+                "total_breakouts": total_breakouts
+            }
+        except Exception as e:
+            logger.error(f"Gün skoru hesaplama hatası: {e}")
+            return {"score": 1, "status": "BELİRSİZ", "reasons": [str(e)], "total_breakouts": 0}

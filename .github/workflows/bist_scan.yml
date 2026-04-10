@@ -8,6 +8,10 @@ on:
   # Manuel tetikleme (test için)
   workflow_dispatch:
 
+concurrency:
+  group: bist-scan
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -44,4 +48,5 @@ jobs:
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add portfolio.db telegram_offset.txt cloud_heartbeat.status || echo "Dosyalar bulunamadi"
           git commit -m "🤖 Oto-Trader: Portföy ve Telegram durumu güncellendi" || echo "Değişiklik yok"
+          git pull --rebase origin main
           git push origin main

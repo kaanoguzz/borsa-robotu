@@ -15,6 +15,7 @@ Kapılar:
 """
 
 import logging
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from data_collector import DataCollector
@@ -262,107 +263,112 @@ class SignalGenerator:
         )
         result["overall_score"] = round(overall_score, 2)
 
-        # ========== VETO SİSTEMİ (6/6 ONAY KONTROLÜ) ==========
-        veto_akd = result["checklist"].get("akd_approved", False)
+        # ========== V2: SMART ENTRY ENGINE (4/6 MANTIGI) ==========
+        # 1. ZORUNLU KRİTERLER (MANDATORY)
         veto_hacim = result["checklist"].get("money_flowing_in", False)
+        # Teknik onay (Leading/Öncü göstergelere öncelik verilir)
+        veto_teknik = technical.get("leading_score", 50) >= 60 or technical.get("overall_score", 50) >= 65
         veto_makro = market_bullish
-        veto_duygu = social_score < 85  # Aşırı Pump (85 üstü) riskli sayılır
-        veto_haber = result["checklist"].get("news_clean", True)
-        veto_teknik = technical_score >= 60
-
-        # VETO ESNETME: Eğer genel skor çok yüksekse (%75+) ve teknik onaylıysa, 
-        # bir ufak parametre (sosyal veya haber) eksik olsa bile B-Sınıfı olarak geçebilir.
-        veto_passed = veto_akd and veto_hacim and veto_makro and veto_duygu and veto_haber and veto_teknik
         
-        # B-Sınıfı Onayı (🥈): 6/6 değil ama 5/6 ve skor yüksek
-        is_b_class = False
-        if not veto_passed and overall_score >= 65:
-            # Kritik olanlar (AKD, Hacim, Teknik, Makro) MUTLAKA olmalı
-            if veto_akd and veto_hacim and veto_teknik and veto_makro:
-                is_b_class = True
+        # 2. ESNEK KRİTERLER (FLEXIBLE) - En az 1 onay gerekli
+        flex_akd = result["checklist"].get("akd_approved", False)
+        flex_haber = result["checklist"].get("news_clean", True)
+        flex_duygu = social_score >= 55 and social_score < 90 # %90+ Duygu aşırı "overhyped" risklidir
+        
+        # 3. İLK KIRILIM (V2'nin asıl odağı)
+        is_early_breakout = technical.get("first_breakout", {}).get("status") == "EARLY"
+        
+        # V2 KARAR: Zorunlular + En az 1 Esnek
+        has_flexible = flex_akd or flex_haber or flex_duygu
+        v2_passed = veto_hacim and veto_teknik and veto_makro and has_flexible
+        
+        # V1 KARAR: Klasik 6/6 (Hala önemli)
+        v1_passed = veto_hacim and veto_teknik and veto_makro and flex_akd and flex_haber and flex_duygu
 
-        failed_params = []
-        if not veto_teknik: failed_params.append("Teknik")
-        if not veto_hacim: failed_params.append("Hacim")
-        if not veto_akd: failed_params.append("AKD/Takas")
-        if not veto_haber: failed_params.append("Haber")
-        if not veto_makro: failed_params.append("Makro")
-        if not veto_duygu: failed_params.append("Risk (Pump)")
-
-        if overall_score >= 60 and veto_passed:
-            raw_action = "GÜÇLÜ AL"
-            emoji = "🟢"
-            onay_notu = "✅ Teknik ✅ Hacim ✅ AKD ✅ Haber ✅ Makro ✅ Risk"
-            balina_notu = result.get("smart_money", {}).get("balina_notu", "")
-            if balina_notu:
-                onay_notu += f"\n\n{balina_notu}"
-            reason = onay_notu
-        elif is_b_class:
-            raw_action = "AL (B-SINIFI)"
-            emoji = "🥈"
-            onay_notu = "🥈 5/6 Onay (B-Sınıfı Fırsat)\n"
-            onay_notu += "✅ Teknik ✅ Hacim ✅ AKD ✅ Makro"
-            reason = onay_notu
-        elif overall_score <= 40 or (overall_score >= 60 and not veto_passed and not is_b_class):
-            raw_action = "SAT"
-            emoji = "🔴"
-            reason = "❌ Bozulan Parametreler: " + ", ".join(failed_params)
-        else:
-            raw_action = "TUT"
-            emoji = "🟡"
-            reason = "Nötr pozisyon."
-
-        signal = {
-            "action": raw_action,
-            "emoji": emoji,
-            "confidence": "Yüksek" if veto_passed else "Düşük",
-            "reason": reason,
-            "checklist": result["checklist"],
-            "all_clear": veto_passed,
-            "failed_params": failed_params,
-            "onay_notu": onay_notu if veto_passed else ""
+        # ========== TRADE KALITE SKORU (TKS) - 1-10 ARASI ==========
+        tks = 0
+        if veto_hacim: tks += 2
+        if technical.get("volume_spike", {}).get("score", 0) >= 85: tks += 1 # Ekstra hacim patlaması
+        if is_early_breakout: tks += 2
+        if veto_makro: tks += 2
+        if flex_akd: tks += 1
+        if flex_haber: tks += 1
+        if flex_duygu: tks += 1
+        if ml_score >= 65: tks += 1
+        
+        result["quality_score"] = tks
+        
+        # V2 Sinyal Şablonu
+        v2_action = "TUT"
+        v2_emoji = "🟡"
+        if v2_passed:
+            v2_action = "🚀 v2 AL (4/6+)"
+            v2_emoji = "🚀" if tks < 7 else "🚀🚀"
+        
+        v2_signal = {
+            "version": "v2",
+            "action": v2_action,
+            "emoji": v2_emoji,
+            "score": overall_score,
+            "quality_score": tks,
+            "is_early": is_early_breakout,
+            "passed": v2_passed,
+            "lot_advice": "FULL GİR" if tks >= 7 else ("KÜÇÜK GİR" if tks >= 5 else "BEKLE"),
+            "reason": f"TKS: {tks}/10 | Erken Kırılım: {'Evet' if is_early_breakout else 'Hayır'}"
         }
 
-        # Güven skoru kontrolü
-        confidence_score = result.get("backtest", {}).get("confidence_score", 0)
+        # V1 Sinyal Şablonu
+        v1_signal = {
+            "version": "v1",
+            "action": "💎 v1 GÜÇLÜ AL (6/6)" if v1_passed else ("TUT" if overall_score >= 50 else "SAT"),
+            "emoji": "💎" if v1_passed else "🟡",
+            "passed": v1_passed,
+            "score": overall_score
+        }
+
+        # Sonuç Objeleri
+        result["v1_signal"] = v1_signal
+        result["v2_signal"] = v2_signal
         
-        # KRİTİK DÜZELTME: Bulut modunda backtest atlandığı için confidence_score 0 gelir.
-        # Eğer backtest atlanmışsa, overall_score üzerinden güven tazele.
-        if result.get("backtest", {}).get("skipped"):
-            effective_confidence = overall_score 
-        else:
-            effective_confidence = confidence_score
-
-        notification_allowed = effective_confidence >= self.min_confidence_score and (veto_passed or is_b_class)
-        signal["notification_allowed"] = notification_allowed
-        signal["confidence_score"] = effective_confidence
-        signal["is_b_class"] = is_b_class
+        # Geriye uyumluluk için ana 'signal' objesini v2 olarak set et
+        result["signal"] = v2_signal
+        result["overall_score"] = overall_score
+        result["current_price"] = df['Close'].iloc[-1]
         
-        if not notification_allowed and not result.get("backtest", {}).get("skipped"):
-            signal["notification_blocked_reason"] = f"VETO'ya takıldı veya Güven Skoru yetersiz."
-
-        result["signal"] = signal
-
-        # ========== KAYDET ==========
-        try:
-            signal_id = self.portfolio.save_signal(
-                symbol=symbol,
-                signal_type=signal["action"],
-                score=overall_score,
-                technical_score=technical_score,
-                news_score=news_score,
-                ml_score=ml_score,
-                price=result.get("current_price", 0),
-                description=signal.get("reason", "")
-            )
-            result["signal_id"] = signal_id
-        except Exception as e:
-            result["errors"].append(f"Sinyal kayıt hatası: {e}")
-
+        # Dual-Save (v1 ve v2 sinyallerini veritabanına kaydet)
+        if v2_passed or v1_passed:
+            try:
+                # v2 Kaydı
+                self.portfolio.save_signal(
+                    symbol=symbol,
+                    signal_type=v2_action,
+                    score=overall_score,
+                    version="v2",
+                    quality_score=tks,
+                    technical_score=technical_score,
+                    news_score=news_score,
+                    ml_score=ml_score,
+                    price=result["current_price"],
+                    description=v2_signal["reason"]
+                )
+                
+                # v1 Kaydı (Eğer onaylıysa)
+                if v1_passed:
+                    self.portfolio.save_signal(
+                        symbol=symbol,
+                        signal_type="v1_6/6",
+                        score=overall_score,
+                        version="v1",
+                        price=result["current_price"],
+                        description="Klasik 6/6 Tam Onay Sinyali"
+                    )
+            except Exception as e:
+                logger.error(f"Sinyal kaydetme hatasi: {e}")
+        
         # ========== RAPOR ==========
         result["report"] = self._generate_report(result)
 
-        logger.info(f"✅ {symbol}: {signal['action']} (Skor: {overall_score:.1f})")
+        logger.info(f"✅ {symbol}: {v2_signal['action']} (Skor: {overall_score:.1f})")
         return result
 
     def _check_volume_confirmation(self, df) -> dict:

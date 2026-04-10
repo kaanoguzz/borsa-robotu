@@ -188,7 +188,15 @@ def normalize_text(text: str) -> str:
     
     # Sohbet kalıpları
     text = text.replace("naber", "nasilsin").replace("napiyorsun", "nasilsin")
-    text = text.replace("kimsin", "kimsin").replace("ne işe yararsın", "kimsin")
+    text = text.replace("kimsin", "kimsin").replace("ne ise yararsin", "kimsin")
+    
+    # Tarama kalıpları
+    text = text.replace("tarama yap", "tara").replace("tarama baslat", "tara")
+    text = text.replace("hisse tara", "tara").replace("piyasa tara", "tara")
+    text = text.replace("scan", "tara").replace("sinyal bul", "tara")
+    text = text.replace("hisse bul", "tara").replace("firsatlari goster", "tara")
+    text = text.replace("ne alalim", "tara").replace("ne alayim", "tara")
+    text = text.replace("bugunku firsatlar", "tara").replace("bugunun hisseleri", "tara")
     
     return text.strip()
 
@@ -288,8 +296,10 @@ def process_user_commands(pm, notifier, dc, sg):
         # YARDIM KOMUTU (TAM FONKSİYON LİSTESİ)
         if text in ["yardim", "help", "/start", "merhaba", "selam", "komutlar"]:
             help_msg = "🤖 <b>BORSA ROBOTU - YETENEK LİSTESİ</b>\n\n" \
+                       "🔍 <b>TARAMA</b>\n" \
+                       "• <code>tara</code> / <code>tarama yap</code> -> Anlık tam BIST 100 taraması\n" \
+                       "• <code>yarin</code> -> Yarın yükselebilecek 5 hisseyi tahmin eder\n\n" \
                        "📊 <b>ANALİZ & SORGULAMA</b>\n" \
-                       "• <code>yarin</code> -> Yarın yükselebilecek 5 hisseyi tahmin eder\n" \
                        "• <code>[HISSE] ne durumda?</code> -> Anlık teknik/duygu analizi\n" \
                        "• <code>endeks</code> -> Borsa genel yönü ve Şelale Riski\n" \
                        "• <code>durum</code> -> Portföy detayı ve ilerleme çubuğu\n\n" \
@@ -302,6 +312,17 @@ def process_user_commands(pm, notifier, dc, sg):
                        "🎯 <b>HEDEF:</b> 200 TL -> 100.000 TL\n" \
                        "<i>Ben 24 saat nöbetteyim, piyasayı taramaya devam ediyorum.</i>"
             notifier.send_message(help_msg)
+            continue
+
+        # TARAMA YAP KOMUTU (ANLIK TAM TARAMA)
+        if text in ["tara", "tarama", "taramayap"]:
+            notifier.send_message(
+                "🔍 <b>ANLIK TAM TARAMA BAŞLATILDI</b>\n\n"
+                "📊 BIST 100 hisseleri 6 kriterle taranıyor...\n"
+                "🎯 Hedef: %4.5+ potansiyelli hisseler\n\n"
+                "<i>Bu işlem 2-4 dakika sürebilir, lütfen bekleyiniz efendim.</i>"
+            )
+            run_instant_scan(notifier, sg, dc)
             continue
 
         # YARIN TAHMİNİ (ÖZEL KOMUT)
@@ -457,6 +478,135 @@ def send_tomorrow_forecast(pm, notifier, dc):
     except Exception as e:
         logger.error(f"Forecast hatasi: {e}")
         notifier.send_message("❌ Tahmin raporu oluşturulurken bir hata oluştu.")
+
+
+# ==================== ANLIK TAM TARAMA (TELEGRAM KOMUTUYLA) ====================
+def run_instant_scan(notifier, sg, dc):
+    """Telegram'dan 'tara' komutuyla tetiklenen anlık tam tarama"""
+    try:
+        from config import BIST100_TICKERS
+        import yfinance as yf
+        
+        now_tr = datetime.now(TZ_TR)
+        logger.info(f"ANLIK TARAMA BAŞLATILDI: {len(BIST100_TICKERS)} hisse")
+        
+        # 1. Toplu veri çek
+        yahoo_tickers = [f"{t}.IS" for t in BIST100_TICKERS]
+        raw_data = yf.download(yahoo_tickers, period="1y", interval="1d", 
+                               group_by='ticker', threads=True, progress=False)
+        
+        buy_a_class = []  # TKS >= 7
+        buy_b_class = []  # TKS < 7
+        total_analyzed = 0
+        
+        # 2. Her hisseyi analiz et
+        for symbol in BIST100_TICKERS:
+            try:
+                yahoo_sym = f"{symbol}.IS"
+                try:
+                    symbol_df = raw_data[yahoo_sym]
+                    if symbol_df is None or symbol_df.empty:
+                        continue
+                except (KeyError, TypeError):
+                    continue
+                
+                result = sg.analyze_stock(symbol, skip_backtest=True, quick_mode=True, external_df=symbol_df)
+                if not result:
+                    continue
+                
+                total_analyzed += 1
+                
+                v2_signal = result.get("v2_signal", {})
+                v1_signal = result.get("v1_signal", {})
+                score = result.get("overall_score", 50)
+                tks = v2_signal.get("quality_score", 0)
+                price = result.get("current_price", 0)
+                reason = v2_signal.get("reason", "")
+                
+                if (v2_signal.get("passed") or v1_signal.get("passed")) and score >= 55:
+                    targets = calculate_targets(symbol, result)
+                    
+                    if targets["target_pct"] >= 4.5:
+                        entry = {
+                            "symbol": symbol,
+                            "price": price,
+                            "score": score,
+                            "tks": tks,
+                            "target": targets["target"],
+                            "target_pct": targets["target_pct"],
+                            "stop": targets["stop"],
+                            "stop_pct": targets["stop_pct"],
+                            "rr": targets["risk_reward"],
+                            "reason": reason,
+                            "v1": v1_signal.get("passed", False),
+                            "v2": v2_signal.get("passed", False),
+                        }
+                        
+                        if tks >= 7:
+                            buy_a_class.append(entry)
+                        else:
+                            buy_b_class.append(entry)
+                            
+            except Exception as e:
+                logger.error(f"{symbol} instant scan hata: {e}")
+                continue
+        
+        # 3. Sonuçları Telegram'a gönder
+        if buy_a_class:
+            buy_a_class.sort(key=lambda x: x["tks"], reverse=True)
+            msg = f"🚀🚀 <b>A-SINIFI SİNYALLER (GÜÇLÜ AL)</b>\n"
+            msg += f"📅 {now_tr.strftime('%d.%m.%Y %H:%M')}\n\n"
+            
+            for s in buy_a_class[:5]:
+                v_tag = "💎v1+v2" if s["v1"] else "🚀v2"
+                msg += f"{'='*28}\n"
+                msg += f"<b>#{s['symbol']}</b> — {v_tag}\n"
+                msg += f"💰 Fiyat: {s['price']:.2f} TL\n"
+                msg += f"🎯 Hedef: {s['target']:.2f} TL (<b>%{s['target_pct']:+.1f}</b>)\n"
+                msg += f"🛑 Stop: {s['stop']:.2f} TL (%{s['stop_pct']:.1f})\n"
+                msg += f"📊 TKS: <b>{s['tks']}/10</b> | Skor: %{s['score']:.0f}\n"
+                msg += f"⚖️ Risk/Ödül: {s['rr']}x\n\n"
+            
+            msg += f"💪 <b>Bu sinyaller FULL GİRİLEBİLİR kalitededir.</b>"
+            notifier.send_message(msg)
+        
+        if buy_b_class:
+            buy_b_class.sort(key=lambda x: x["target_pct"], reverse=True)
+            msg = f"🥈 <b>B-SINIFI FIRSATLAR</b>\n"
+            msg += f"📅 {now_tr.strftime('%d.%m.%Y %H:%M')}\n\n"
+            
+            for s in buy_b_class[:5]:
+                v_tag = "💎v1+v2" if s["v1"] else "🚀v2"
+                msg += f"<b>#{s['symbol']}</b> — {v_tag}\n"
+                msg += f"💰 {s['price']:.2f} TL → 🎯 {s['target']:.2f} TL (<b>%{s['target_pct']:+.1f}</b>)\n"
+                msg += f"📊 TKS: {s['tks']}/10 | Stop: {s['stop']:.2f} TL\n\n"
+            
+            msg += f"⚠️ <i>Küçük lotlarla denenebilir.</i>"
+            notifier.send_message(msg)
+        
+        if not buy_a_class and not buy_b_class:
+            notifier.send_message(
+                f"🛡️ <b>NAKİTTE KAL</b>\n\n"
+                f"📅 {now_tr.strftime('%d.%m.%Y %H:%M')}\n"
+                f"🔍 {total_analyzed} hisse 6 faktörle tarandı\n"
+                f"❌ %4.5+ hedefli güvenli AL sinyali bulunamadı.\n\n"
+                f"<i>Piyasa şartları uygun değil — sabırlı ol efendim.</i>"
+            )
+        
+        # Özet
+        notifier.send_message(
+            f"📊 <b>TARAMA ÖZETİ</b>\n\n"
+            f"📈 Taranan: {total_analyzed} hisse\n"
+            f"🚀 A-Sınıfı (TKS≥7): {len(buy_a_class)}\n"
+            f"🥈 B-Sınıfı: {len(buy_b_class)}\n\n"
+            f"<i>6 Kriter: Hacim ✓ Teknik ✓ Makro ✓ AKD ✓ Haber ✓ Duygu ✓</i>"
+        )
+        
+        logger.info(f"Anlık tarama bitti: {total_analyzed} hisse, A:{len(buy_a_class)}, B:{len(buy_b_class)}")
+        
+    except Exception as e:
+        logger.error(f"Anlık tarama hatası: {e}")
+        notifier.send_message(f"❌ <b>Tarama sırasında hata:</b> {str(e)[:200]}")
 
 
 # ==================== ANA TARAMA ====================

@@ -81,13 +81,13 @@ def send_telegram(text: str) -> bool:
 
 # ==================== BORSA SAATİ KONTROLÜ ====================
 def is_market_hours() -> bool:
-    """Borsa saatleri: Hafta içi 09:55 - 18:10"""
+    """Borsa saatleri: Hafta içi 09:40 - 18:10"""
     now = datetime.now(TZ_TR)
     if now.weekday() >= 5:  # Hafta sonu
         return False
-    # Dakika cinsinden kontrol (09:55 = 595, 18:10 = 1090)
+    # Dakika cinsinden kontrol (09:40 = 580, 18:10 = 1090)
     current_minutes = now.hour * 60 + now.minute
-    return 595 <= current_minutes <= 1090
+    return 580 <= current_minutes <= 1090
 
 
 # ==================== HEDEF FİYAT HESAPLA ====================
@@ -666,9 +666,9 @@ def _send_heartbeat_if_needed(now_tr):
     """Borsa açılış saatinde (10:00) güven bildirimi gönderir"""
     if now_tr.weekday() >= 5:  # Hafta sonu
         return
-    # Sadece 09:55-10:15 arasında heartbeat gönder (borsa açılmadan önce)
-    if now_tr.hour == 9 and now_tr.minute >= 55:
-        pass  # 09:55+ ise devam
+    # Sadece 09:40-10:15 arasında heartbeat gönder (borsa açılmadan önce)
+    if now_tr.hour == 9 and now_tr.minute >= 40:
+        pass  # 09:40+ ise devam
     elif now_tr.hour == 10 and now_tr.minute <= 15:
         pass  # 10:00-10:15 ise devam
     else:
